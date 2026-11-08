@@ -26,6 +26,7 @@ static const char *const ECHO_N[8] = {"1/16", "1/8", "1/8T", "1/8.", "1/4", "1/4
 static const char *const MOCT_N[4] = {"-1", "0", "+1", "+2"};
 static const char *const BOCT_N[3] = {"-1", "0", "+1"};
 static const char *const SOCT_N[3] = {"LOW", "MID", "HIGH"};
+static const char *const KEYPLAY_N[3] = {"CHORDS", "MELODY", "BOTH"};
 
 static const pd_t PD[NP] = {
     [P_ROOT] = {"ROOT", 11, 9, FM_NAMES, NOTE_N},
@@ -133,12 +134,13 @@ static const pd_t PD[NP] = {
     [P_DMEVOLVE] = {"EVOLVE", 1, 0, FM_ONOFF, 0},
     [P_PTGT] = {"PRESSURE", NLTGT - 1, 14, FM_NAMES, LTGT_NAME},
     [P_PDEPTH] = {"PRESS DEPTH", 127, 110, FM_BIPOLAR, 0},
+    [P_KEYPLAY] = {"KEYS PLAY", 2, 0, FM_NAMES, KEYPLAY_N},
 };
 static const uint16_t MORPH_MS[9] = {0, 500, 1000, 2000, 4000, 8000, 15000, 30000, 60000};
 
 /* ------------------------------------------------------------------- the pages --- */
 enum { V_RIVER, V_DRUMS, V_MEL, V_BASS, V_CSEQ, V_FILTER, V_LFO, V_MIXER, V_SCENES };
-enum { K_DRONE, K_DRUMS, K_MEL, K_BASS, K_CSEQ, K_SCENES };   /* what the keys do on the page */
+enum { K_DRONE, K_DRUMS, K_MEL, K_BASS, K_CSEQ, K_SCENES, K_LIVE };   /* (K_LIVE: the melody played freely) */   /* what the keys do on the page */
 typedef struct {
     const char *name;
     uint8_t button, view, keys;
@@ -146,9 +148,9 @@ typedef struct {
 } page_t;
 #define NONE NP
 static const page_t PAGES[] = {
-    {"PLAY", B_HOME, V_RIVER, K_DRONE, {P_CHORD, P_HARM, P_HOLD, P_LATCH}},
+    {"PLAY", B_HOME, V_RIVER, K_DRONE, {P_KEYPLAY, P_CHORD, P_HOLD, P_LATCH}},
     {"SOUND", B_HOME, V_RIVER, K_DRONE, {P_ATTACK, P_RELEASE, P_DETUNE, P_FCUT}},
-    {"SOUND II", B_HOME, V_RIVER, K_DRONE, {P_DPRESET, P_VOICING, P_DMOTION, P_DRAND}},
+    {"SOUND II", B_HOME, V_RIVER, K_DRONE, {P_DPRESET, P_VOICING, P_HARM, P_DRAND}},
     {"SPACE", B_HOME, V_RIVER, K_DRONE, {P_CAMT, P_SHIM, P_EAMT, P_FREEZE}},
     {"KEY & TOUCH", B_HOME, V_RIVER, K_DRONE, {P_ROOT, P_SCALE, P_PTGT, P_PDEPTH}},
     {"MIXER", B_HOME, V_MIXER, K_DRONE, {P_MXDRONE, P_MXMEL, P_MXBASS, P_MXDRUM}},
@@ -172,6 +174,7 @@ static const page_t PAGES[] = {
     {"ECHO", B_FX, V_RIVER, K_DRONE, {P_ETIME, P_EFB, P_EAMT, P_FREEZE}},
     {"TAPE", B_FX, V_RIVER, K_DRONE, {P_TDRIVE, P_TWOBBLE, P_MFILT, P_WIDTH}},
     {"MELODY", B_ARP, V_MEL, K_MEL, {P_MPLAYS, P_MSOUND, P_MOCT, P_MLEN}},
+    {"MELODY LIVE", B_ARP, V_MEL, K_LIVE, {P_KEYPLAY, P_MSOUND, P_MOCT, P_MTONE}},
     {"MELODY SOUND", B_ARP, V_MEL, K_MEL, {P_MSOUND, P_MRAND, P_MTONE, P_MGLIDE}},
     {"MELODY STEP", B_ARP, V_MEL, K_MEL, {P_MCUR, P_MNOTE, P_MTONE, P_MGLIDE}},
     {"MELODY TOOLS", B_ARP, V_MEL, K_MEL, {P_MGEN, P_MCLEAR, P_MSHIFT, P_MHUMAN}},
@@ -190,7 +193,7 @@ static const page_t PAGES[] = {
 #define PG_SCENES (NPAGES - 1u)
 
 /* ------------------------------------------------------------------- state --- */
-#define STATE_MAGIC 0x33454C46u          /* "FLE3" */
+#define STATE_MAGIC 0x34454C46u          /* "FLE4" */
 #define NSCN 8u
 typedef struct {
     uint8_t p[NP];
@@ -243,6 +246,9 @@ static struct {
     uint8_t morphing;
     uint8_t clear_arm;
     uint8_t at;                          /* MIDI aftertouch in */
+    uint8_t rec;                         /* recording: the melody played goes into the melody's steps */
+    int8_t livenote[NKEYS];              /* each key's melody note sounding (played live), -1 */
+    int8_t midilive[128];                /* (a MIDI note's, +1: 0 none) */
     uint32_t clear_at;
 } ui;
 
@@ -887,7 +893,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
             mq[mq_w++ % 32u] = pkt;
     }
     gain_q = (float)master_q12 / 4096.0f;
-    eng_render(lr, n, gain_q);
+    PLAT_FAR(eng_render)(lr, n, gain_q);  /* (the sound runs from RAM: reached through a pointer) */
 }
 
 void app_panic(void) { eng_event(EV_PANIC, 0, 0.0f); }
@@ -979,6 +985,41 @@ static void drum_key(uint32_t k)
     }
 }
 
+/* the melody step's degree nearest a note (the steps keep degrees of the key, from the melody's own octave) */
+static int32_t mel_base(void)
+{
+    int32_t root = F.p[P_ROOT] % 12u;
+    return 60 + root + 12 * ((int32_t)F.p[P_MOCT] - 1) - (root > 5 ? 12 : 0);
+}
+static int32_t mel_degree(int32_t note)
+{
+    int32_t base = mel_base(), d, snapped = key_snap(note, F.p, &d), dd = 0, best = 99, i;
+    for (i = 0; i <= 21; i++) {
+        int32_t x = base + scale_deg(F.p[P_SCALE], i) - snapped;
+        x = x < 0 ? -x : x;
+        if (x < best) {
+            best = x;
+            dd = i;
+        }
+    }
+    return dd;
+}
+/* the melody played freely: the note sounds while held; recording, it goes into the nearest step too */
+static int32_t live_on(int32_t note, float v)
+{
+    int32_t n = note + 12 * ((int32_t)F.p[P_MOCT] - 1);
+    n = n < 24 ? 24 : n > 108 ? 108 : n;
+    eng_event(EV_MEL_ON, n, v);
+    if (ui.rec && F.playing && V.step >= 0) {
+        uint32_t s = ((uint32_t)V.step + (V.sfrac > 0.5f ? 1u : 0u)) % NSTEP;
+        F.pat.mel[s] = (int8_t)mel_degree(n);
+        if (!F.p[P_MPLAYS])
+            F.p[P_MPLAYS] = 1;
+        view_sync();
+    }
+    return n;
+}
+
 static void key_down(uint32_t k, uint32_t vel)
 {
     const page_t *pp = &PAGES[pg];
@@ -1049,13 +1090,23 @@ static void key_down(uint32_t k, uint32_t vel)
         cur_next(P_CSCUR, NCSEQ);
         return;
     }
+    case K_LIVE:
+        ui.livenote[k] = (int8_t)live_on(note, v);
+        return;
     default:
-        play_note((int32_t)k, note, v);
+        if (F.p[P_KEYPLAY] != 0u)        /* MELODY or BOTH: the melody's sound on the keys */
+            ui.livenote[k] = (int8_t)live_on(note, v);
+        if (F.p[P_KEYPLAY] != 1u)        /* CHORDS or BOTH */
+            play_note((int32_t)k, note, v);
         return;
     }
 }
 static void key_up(uint32_t k)
 {
+    if (ui.livenote[k] >= 0) {
+        eng_event(EV_MEL_OFF, ui.livenote[k], 0.0f);
+        ui.livenote[k] = -1;
+    }
     if (PAGES[pg].keys == K_DRONE)
         release_note((int32_t)k);
 }
@@ -1078,11 +1129,22 @@ static void rec_tap(void)
         F.pat.cseq[F.p[P_CSCUR] % NCSEQ] = -1;
         cur_next(P_CSCUR, NCSEQ);
         return;
+    case K_LIVE:
+        break;
     default:
-        F.p[P_FREEZE] ^= 1u;
-        app_say("FREEZE", F.p[P_FREEZE] ? "ON" : "OFF");
-        return;
+        if (F.p[P_KEYPLAY] == 0u) {      /* the keys play chords: REC freezes the cloud */
+            F.p[P_FREEZE] ^= 1u;
+            app_say("FREEZE", F.p[P_FREEZE] ? "ON" : "OFF");
+            return;
+        }
+        break;
     }
+    ui.rec ^= 1u;                        /* the keys play the melody: REC records it into the melody's steps */
+    if (ui.rec && !F.playing) {
+        F.playing = 1;
+        F.p[P_MPLAYS] = 1;
+    }
+    app_say(ui.rec ? "RECORDING" : "RECORD", ui.rec ? "PLAY THE MELODY" : "OFF");
 }
 
 static void page_button(uint32_t b)
@@ -1128,6 +1190,7 @@ static void input(void)
                 ui.btn_used[k] = 1;
                 if (!F.playing) {
                     F.fill = 0;
+                    ui.rec = 0;
                     if (grp_find(G_SEQ) >= 0)
                         grp_off(G_SEQ);
                 }
@@ -1192,10 +1255,19 @@ static void input(void)
         uint32_t pkt = mq[mq_r++ % 32u], s = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = pkt >> 24, ch = s & 15u;
         if (F.p[P_MIDICH] && ch + 1u != F.p[P_MIDICH])
             continue;
-        if ((s & 0xF0u) == 0x90u && d2)
-            play_note(100 + (int32_t)d1, (int32_t)d1, 0.35f + 0.65f * (float)d2 / 127.0f);
-        else if ((s & 0xF0u) == 0x80u || (s & 0xF0u) == 0x90u)
+        if ((s & 0xF0u) == 0x90u && d2) {
+            float v = 0.35f + 0.65f * (float)d2 / 127.0f;
+            if (F.p[P_KEYPLAY] != 0u)
+                ui.midilive[d1] = (int8_t)(live_on((int32_t)d1, v) + 1);
+            if (F.p[P_KEYPLAY] != 1u)
+                play_note(100 + (int32_t)d1, (int32_t)d1, v);
+        } else if ((s & 0xF0u) == 0x80u || (s & 0xF0u) == 0x90u) {
+            if (ui.midilive[d1]) {
+                eng_event(EV_MEL_OFF, ui.midilive[d1] - 1, 0.0f);
+                ui.midilive[d1] = 0;
+            }
             release_note(100 + (int32_t)d1);
+        }
         else if ((s & 0xF0u) == 0xD0u)   /* channel aftertouch: pressure */
             ui.at = (uint8_t)d1;
         else if ((s & 0xF0u) == 0xA0u)   /* poly aftertouch */
@@ -1230,6 +1302,8 @@ static void input(void)
     ui.btn = btn;
 }
 
+static uint32_t blink_ms(void) { return plat_ms(); }
+
 /* the lights: the page's button; the keys as the page has them */
 static void lights(void)
 {
@@ -1237,7 +1311,7 @@ static void lights(void)
     const page_t *pp = &PAGES[pg];
     if (F.playing)
         b |= 1u << B_PLAY;
-    if (F.p[P_FREEZE])
+    if (F.p[P_FREEZE] || (ui.rec && (blink_ms() / 300u) % 2u))   /* (recording: REC blinks) */
         b |= 1u << B_REC;
     switch (pp->keys) {
     case K_DRUMS: {
@@ -1330,7 +1404,9 @@ static void draw_header(void)
         tcat(t, F.playing ? "  >" : "  .");
         x = 232 - tw(&FONT_S, t);
         cv_text(x, 9, &FONT_S, t, F.playing ? C_AMBER : C_SLATE);
-        if (F.p[P_FREEZE])
+        if (ui.rec)
+            cv_text(x - 34, 9, &FONT_S, "REC", C_AMBER);
+        else if (F.p[P_FREEZE])
             cv_text(x - 34, 9, &FONT_S, "FRZ", C_ICE);
         if (PAGES[pg].button == B_GLO) { /* GLOBAL: how hard the sound works the FM-1 (and its late blocks) */
             uint32_t c = plat_cpu_pct();
@@ -1641,6 +1717,7 @@ void app_init(void)
     harm_update();
     ui.touched = -1;
     ui.cs_idx = -1;
+    memset(ui.livenote, -1, sizeof ui.livenote);
     ui.cs_bar = 0xFFFFFFFFu;
 }
 
