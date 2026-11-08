@@ -247,6 +247,7 @@ static struct {
     uint8_t clear_arm;
     uint8_t at;                          /* MIDI aftertouch in */
     uint8_t rec;                         /* recording: the melody played goes into the melody's steps */
+    uint8_t rec_chords, rec_cs_was;      /* (chords recorded this take; the sequence was playing before) */
     int8_t livenote[NKEYS];              /* each key's melody note sounding (played live), -1 */
     int8_t midilive[128];                /* (a MIDI note's, +1: 0 none) */
     uint32_t clear_at;
@@ -484,8 +485,24 @@ static void groups_all_off(int keep_seq)
             grp_off(grp[i].id);
 }
 /* a key (or a MIDI note) played: its chord, as HARMONY makes it */
+static void view_sync(void);
+static void rec_chord(int32_t note)      /* recording: the chord's degree into the chord sequence, this bar's slot */
+{
+    uint32_t bars = 1u << (F.p[P_CSBARS] % 4u), slot;
+    int32_t d, n = scale_len(F.p[P_SCALE]);
+    if (!ui.rec || !F.playing || V.step < 0)
+        return;
+    key_snap(note, F.p, &d);
+    d = ((d % n) + n) % n;               /* (the chord on that note of the key, in the lower octave) */
+    slot = ((V.bar + (V.step >= 12 ? 1u : 0u)) / bars) % NCSEQ;   /* (late in a bar: the next bar's) */
+    F.pat.cseq[slot] = (int8_t)d;
+    ui.rec_chords = 1;
+    view_sync();
+}
 static void play_note(int32_t id, int32_t note, float vel)
 {
+    if (id < 200)
+        rec_chord(note);
     int8_t c[8];
     int32_t root = note, deg = 0;
     uint32_t n;
@@ -1129,22 +1146,27 @@ static void rec_tap(void)
         F.pat.cseq[F.p[P_CSCUR] % NCSEQ] = -1;
         cur_next(P_CSCUR, NCSEQ);
         return;
-    case K_LIVE:
-        break;
     default:
-        if (F.p[P_KEYPLAY] == 0u) {      /* the keys play chords: REC freezes the cloud */
-            F.p[P_FREEZE] ^= 1u;
-            app_say("FREEZE", F.p[P_FREEZE] ? "ON" : "OFF");
-            return;
-        }
         break;
     }
-    ui.rec ^= 1u;                        /* the keys play the melody: REC records it into the melody's steps */
-    if (ui.rec && !F.playing) {
-        F.playing = 1;
-        F.p[P_MPLAYS] = 1;
+    ui.rec ^= 1u;                        /* REC: what the keys play goes into the steps (melody notes, chords) */
+    if (ui.rec) {
+        ui.rec_chords = 0;
+        if (!F.playing)
+            F.playing = 1;
+        if (PAGES[pg].keys == K_LIVE || F.p[P_KEYPLAY] != 0u)
+            F.p[P_MPLAYS] = 1;
+        else if (F.p[P_CSPLAYS]) {       /* (recording chords: the sequence quiet meanwhile, so it doesn't fight you) */
+            F.p[P_CSPLAYS] = 0;
+            ui.rec_cs_was = 1;
+        }
+        app_say("RECORDING", PAGES[pg].keys == K_LIVE || F.p[P_KEYPLAY] == 1u ? "PLAY THE MELODY" : "PLAY CHORDS");
+    } else {
+        if (ui.rec_chords || ui.rec_cs_was)
+            F.p[P_CSPLAYS] = 1;          /* the chords played come back, each EACH bars */
+        ui.rec_cs_was = 0;
+        app_say("RECORD", ui.rec_chords ? "CHORDS KEPT" : "OFF");
     }
-    app_say(ui.rec ? "RECORDING" : "RECORD", ui.rec ? "PLAY THE MELODY" : "OFF");
 }
 
 static void page_button(uint32_t b)
@@ -1201,9 +1223,6 @@ static void input(void)
                     app_say("RELEASE ALL", "");
                     ui.btn_used[B_OCTDN] = ui.btn_used[B_OCTUP] = 1;
                 }
-            } else if (k == B_REC) {
-                rec_tap();
-                ui.btn_used[k] = 1;
             }
         } else if (!(btn & bit) && (ui.btn & bit) && !ui.btn_used[k]) {
             if (k == B_OCTDN || k == B_OCTUP) {
@@ -1216,11 +1235,18 @@ static void input(void)
                     t[2] = 0;
                     app_say("OCTAVE", t);
                 }
+            } else if (k == B_REC) {      /* REC tapped: record (held: freeze, below) */
+                rec_tap();
             } else if (k == B_SAVE && now - ui.btn_at[k] > 900u) {
                 app_say("STATE", state_save() ? "NOT SAVED" : "SAVED");
             } else {
                 page_button(k);
             }
+        }
+        if ((btn & bit) && k == B_REC && !ui.btn_used[k] && now - ui.btn_at[k] > 600u) {
+            ui.btn_used[k] = 1;              /* REC held: the cloud frozen (or let go) */
+            F.p[P_FREEZE] ^= 1u;
+            app_say("FREEZE", F.p[P_FREEZE] ? "ON" : "OFF");
         }
         if ((btn & bit) && k == B_SAVE && !ui.btn_used[k] && now - ui.btn_at[k] > 900u && PAGES[pg].keys != K_SCENES) {
             ui.btn_used[k] = 1;              /* SAVE held: the state kept now */
