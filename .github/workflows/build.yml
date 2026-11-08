@@ -1,0 +1,98 @@
+# SPDX-License-Identifier: MPL-2.0
+# Builds VOID for the M-VAVE FM-1: the firmware (void-VERSION.fwsc, kept as a download on the run's page) and the
+# site on GitHub Pages: an install page for Chrome or Edge, VOID in the browser, and the manual.
+name: Build VOID
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "version (like 0.1 or 1.2)"
+        default: "0.1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: void-build
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    env:
+      VERSION: ${{ inputs.version || '0.1' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python packages
+        run: |
+          sudo apt-get install -y -qq libfribidi0
+          python3 -m pip install Pillow
+          python3 -c "from PIL import features; assert features.check('raqm'), 'Pillow without raqm'"
+
+      - name: JieLi Linux toolchain (from JieLi's server)
+        run: |
+          mkdir -p ~/.jieli
+          curl -fL --retry 3 https://pkgman.jieliapp.com/s/linux-toolchain | tar -xJ -C ~/.jieli
+          TC="$(ls -d ~/.jieli/jieli-linux-toolchains-* | sort | tail -1)"
+          ln -sfn "$(basename "$TC")" ~/.jieli/toolchain
+          echo "JIELI_TOOLCHAIN=$HOME/.jieli/toolchain" >> "$GITHUB_ENV"
+
+      - name: JieLi AC79 SDK (three files the package needs)
+        run: |
+          for i in 1 2 3; do
+            git clone -q --depth 1 --branch AC79NN_SDK_V1.2.1_2023-12-13 \
+                https://gitee.com/Jieli-Tech/fw-AC79_AIoT_SDK.git ~/fw-AC79_AIoT_SDK && break
+            rm -rf ~/fw-AC79_AIoT_SDK
+            sleep 20
+          done
+          test -d ~/fw-AC79_AIoT_SDK
+          echo "AC79_SDK=$HOME/fw-AC79_AIoT_SDK" >> "$GITHUB_ENV"
+
+      - name: Build the firmware
+        run: ./build.sh --release "$VERSION"
+
+      - name: Keep the firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: VOID-${{ env.VERSION }}-firmware
+          path: |
+            app/build/void-*.fwsc
+            app/build/firmware.json
+          if-no-files-found: error
+
+      - name: VOID in the browser (Emscripten 6.0.10, as fm1-base's template)
+        run: |
+          git clone -q https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          git -C "$RUNNER_TEMP/emsdk" checkout -q a2b92777574c2feda07994cd4f1079a3dfc151f8
+          "$RUNNER_TEMP/emsdk/emsdk" install 6.0.10
+          "$RUNNER_TEMP/emsdk/emsdk" activate 6.0.10
+          source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
+          ./build.sh --web
+
+      - name: The site
+        run: python3 fm1-base/tools/make_site.py app "app/build/void-$VERSION.fwsc" "$VERSION" site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  pages:
+    needs: firmware
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
