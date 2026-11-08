@@ -6,11 +6,8 @@
 #include "engine.h"
 #include "drums.h"
 
-#ifdef __PI32V2__
-#define POOL __attribute__((section(".pool")))
-#else
-#define POOL
-#endif
+#include "plat.h"
+#define POOL PLAT_POOL                   /* big buffers in the FM-1's 336 KB pool RAM (not the 96 KB of .bss) */
 
 floe_t F;
 volatile floe_view_t V;
@@ -747,7 +744,8 @@ static void lfos_chunk(void)
 
 /* ------------------------------------------------------------------- the sequencers --- */
 static struct {
-    double pos;                          /* in sixteenths since PLAY */
+    float pos;                           /* sixteenths since the next step's place on the grid (floats only: the FM-1
+                                          * has no double maths) */
     int32_t step;                        /* the last struck, absolute */
     uint8_t running;
     uint32_t bar;
@@ -872,15 +870,15 @@ static void seq_chunk(void)
     }
     if (!sq.running) {                   /* PLAY: from the top */
         sq.running = 1;
-        sq.pos = 0.0;
+        sq.pos = 0.0f;
         sq.step = -1;
         mel_last_f = 0.0f;
     }
     {
         int32_t next = sq.step + 1;
-        double at = (double)next + (double)(swing_off(next, (float)sps) / sps);
-        if (sq.pos >= at) {
+        if (sq.pos >= swing_off(next, sps) / sps) {
             sq.step = next;
+            sq.pos -= 1.0f;              /* (now measured from the step after) */
             seq_step(next);
             if (F.pat.mel[next % (int32_t)NSTEP] != MEL_REST) {
                 uint32_t gap = 1;
@@ -895,7 +893,7 @@ static void seq_chunk(void)
         if (mel_gate_left <= 0.0f)
             mel_off_all();
     }
-    sq.pos += (double)CH / (double)sps;
+    sq.pos += (float)CH / sps;
 }
 
 void eng_midi_clock(uint32_t status)
