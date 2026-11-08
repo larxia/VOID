@@ -31,17 +31,18 @@ static inline float sat(float x) { x = clampf(x, -1.5f, 1.5f); return x - 0.1481
 
 /* a TPT state-variable filter: its coefficients for a cutoff (Hz) and a Q, then a sample through it */
 typedef struct { float a1, a2, a3, k, s1, s2; } svf_t;
-static void svf_set(svf_t *f, float hz, float q)
+static void svf_set_at(svf_t *f, float hz, float q, float inv_fs)   /* (at a rate: the drones run at half) */
 {
     float g;
-    hz = clampf(hz, 16.0f, 19000.0f);
-    g = fm_tanf(3.14159265f * hz * INV_FS);
+    hz = clampf(hz, 16.0f, 0.43f / inv_fs);
+    g = fm_tanf(3.14159265f * hz * inv_fs);
     f->k = 1.0f / (q < 0.3f ? 0.3f : q);
     f->a1 = 1.0f / (1.0f + g * (g + f->k));
     f->a2 = g * f->a1;
     f->a3 = g * f->a2;
 }
 /* mode 0 low, 1 band, 2 high, 3 notch */
+static void svf_set(svf_t *f, float hz, float q) { svf_set_at(f, hz, q, INV_FS); }
 static inline float svf(svf_t *f, float x, int mode)
 {
     float v3 = x - f->s2, v1 = f->a1 * f->s1 + f->a2 * v3, v2 = f->s2 + f->a2 * f->s1 + f->a3 * v3;
@@ -112,6 +113,8 @@ static dvoice_t dv[NDV];
 volatile uint32_t eng_maxdv = NDV;       /* the drone voices allowed (the main loop's CPU guard lowers it) */
 static uint32_t ages;
 static float dl[CH], dr[CH];             /* the drones' chunk */
+#define DH (CH / 2u)                     /* the drones run at half the rate (22.05 kHz: soft pads, filtered), then up */
+static float hl[DH], hr[DH], hl_last, hr_last;
 
 static void drone_on(int note, float vel)
 {
@@ -179,8 +182,9 @@ static void drones_chunk(void)
     }
     for (k = 0; k < NPART; k++)
         pa[k] *= 0.55f / ps;
-    for (i = 0; i < CH; i++)
-        dl[i] = dr[i] = 0.0f;
+    const float IFS = 2.0f * INV_FS;    /* (one step of the half rate) */
+    for (i = 0; i < DH; i++)
+        hl[i] = hr[i] = 0.0f;
     V.sounding = 0;
     for (j = 0; j < NDV; j++) {
         dvoice_t *v = &dv[j];
@@ -201,33 +205,40 @@ static void drones_chunk(void)
         v->env = e1;
         V.vnote[j] = (int8_t)v->note;
         V.vlvl[j] = e1;
-        de = (e1 - e0) * (1.0f / (float)CH);
+        de = (e1 - e0) * (1.0f / (float)DH);
         f = mtof((float)v->note + vib * 0.01f);
         v->f = f;
         for (k = 0; k < NPART; k++) {    /* each partial's step this chunk, its wander */
             float fk = f * (float)(k + 1u) * (1.0f + stretch * (float)(k * k)), w;
-            if (fk > 18000.0f) {
+            if (fk > 10000.0f) {
                 cr[k] = 1.0f;
                 ci[k] = 0.0f;
                 continue;
             }
-            w = 6.2831853f * fk * INV_FS;
+            w = 6.2831853f * fk * IFS;
             cr[k] = fm_cosf(w);
             ci[k] = fm_sinf(w);
             v->pdph[k] += v->pdrift[k] * (float)CH * INV_FS;
             v->pdph[k] -= v->pdph[k] >= 1.0f ? 1.0f : 0.0f;
         }
-        dt[0] = f * fm_exp2f(det * (1.0f / 1200.0f)) * INV_FS;
-        dt[1] = f * fm_exp2f(-det * (1.0f / 1200.0f)) * INV_FS;
-        dt[2] = f * 0.5f * INV_FS;
-        svf_set(&v->tone, f * (1.0f + 39.0f * tone * tone), 0.7f);
-        svf_set(&v->br, f * 2.0f, 24.0f);
+        dt[0] = f * fm_exp2f(det * (1.0f / 1200.0f)) * IFS;
+        dt[1] = f * fm_exp2f(-det * (1.0f / 1200.0f)) * IFS;
+        dt[2] = f * 0.5f * IFS;
+        svf_set_at(&v->tone, f * (1.0f + 39.0f * tone * tone), 0.7f, IFS);
+        svf_set_at(&v->br, f * 2.0f, 24.0f, IFS);
         g = 0.16f;
         {
-            float amp[NPART];
+            float amp[NPART], re[NPART], im[NPART];
+            uint32_t np = 0;
             for (k = 0; k < NPART; k++)
                 amp[k] = pa[k] * (1.0f - motion * 0.6f * (0.5f + 0.5f * fm_sin_turns(v->pdph[k]))) * pmix;
-            for (i = 0; i < CH; i++) {
+            for (k = 0; k < NPART; k++) {    /* (the audible ones, in locals: no memory traffic a sample) */
+                re[k] = v->pre[k];
+                im[k] = v->pim[k];
+                if (amp[k] > 0.004f && ci[k] != 0.0f)
+                    np = k + 1u;
+            }
+            for (i = 0; i < DH; i++) {
                 float s = 0.0f, c = 0.0f, x;
                 e0 += de;
                 if (choir > 0.001f) {
@@ -238,18 +249,21 @@ static void drones_chunk(void)
                     }
                     s += svf(&v->tone, c * 0.33f, 0) * choir;
                 }
-                if (pmix > 0.001f)
-                    for (k = 0; k < NPART; k++) {
-                        float re = v->pre[k] * cr[k] - v->pim[k] * ci[k];
-                        v->pim[k] = v->pre[k] * ci[k] + v->pim[k] * cr[k];
-                        v->pre[k] = re;
-                        s += v->pim[k] * amp[k];
-                    }
+                for (k = 0; k < np; k++) {
+                    float r2 = re[k] * cr[k] - im[k] * ci[k];
+                    im[k] = re[k] * ci[k] + im[k] * cr[k];
+                    re[k] = r2;
+                    s += im[k] * amp[k];
+                }
                 if (breath > 0.001f)
                     s += svf(&v->br, rndf(), 1) * breath * 1.6f;
                 x = s * e0 * e0 * g;
-                dl[i] += x * v->pl;
-                dr[i] += x * v->pr;
+                hl[i] += x * v->pl;
+                hr[i] += x * v->pr;
+            }
+            for (k = 0; k < np; k++) {
+                v->pre[k] = re[k];
+                v->pim[k] = im[k];
             }
         }
         for (k = 0; k < NPART; k++) {    /* the phasors back to unit length */
@@ -596,24 +610,30 @@ static inline float fdn_read(uint32_t k, float len)
     return ((float)fdn_buf[k][a] + (float)(fdn_buf[k][(uint32_t)(a + 1) % FDN_MAX] - fdn_buf[k][a]) * fr) * FDN_IQ;
 }
 
+static float cw_last_l, cw_last_r, fdn_mo[2];
 static void cloud_chunk(float size, float decay_s, float damp, float shim)
 {
     uint32_t i, k;
     float g[NFDN], lp = 0.08f + 0.85f * (1.0f - damp), fz = frz, in_g = 1.0f - fz;
     float tgt[NFDN];
     for (k = 0; k < NFDN; k++) {
-        tgt[k] = (float)FDN_LEN[k] * (0.35f + 0.65f * size);
-        g[k] = fz > 0.5f ? 1.0f : fm_powf(10.0f, -3.0f * tgt[k] / (decay_s * FS));
+        tgt[k] = (float)FDN_LEN[k] * 0.5f * (0.35f + 0.65f * size);   /* (at half the rate: half the samples) */
+        g[k] = fz > 0.5f ? 1.0f : fm_powf(10.0f, -3.0f * tgt[k] / (decay_s * FS * 0.5f));
         g[k] += (1.0f - g[k]) * fz;
     }
     if (fz > 0.5f)
         lp = 1.0f;
     fdn_mod_ph = wrap(fdn_mod_ph + 0.4f * (float)CH * INV_FS);
-    for (i = 0; i < CH; i++) {
-        float x = (cin_l[i] + cin_r[i]) * 0.5f * in_g, y[NFDN], sum = 0.0f, a;
+    {
+        float m0 = 3.0f * fm_sin_turns(fdn_mod_ph), m1 = 3.0f * fm_sin_turns(wrap(fdn_mod_ph + 0.25f));
+        fdn_mo[0] = m0;                  /* (the two lines' wander, once a chunk: it moves at 0.4 Hz) */
+        fdn_mo[1] = m1;
+    }
+    for (i = 0; i < CH; i += 2u) {      /* the cloud runs at half the rate: a sample from each two */
+        float x = (cin_l[i] + cin_r[i] + cin_l[i + 1u] + cin_r[i + 1u]) * 0.25f * in_g, y[NFDN], sum = 0.0f, a, ol, or_;
         /* the shimmer: an octave up off the cloud's last output, fed back in */
         if (shim > 0.001f) {
-            float o = 0.0f, W = 2048.0f;
+            float o = 0.0f, W = 1024.0f;
             uint32_t h;
             sh_buf[sh_w] = sh_out;
             sh_ph += 1.0f / W;
@@ -642,7 +662,7 @@ static void cloud_chunk(float size, float decay_s, float damp, float shim)
         ap_w = (ap_w + 1u) & 1023u;
         for (k = 0; k < NFDN; k++) {
             fdn_len[k] += (tgt[k] - fdn_len[k]) * 0.0005f;
-            y[k] = fdn_read(k, fdn_len[k] + (k < 2u ? 6.0f * fm_sin_turns(wrap(fdn_mod_ph + 0.25f * (float)k)) : 0.0f));
+            y[k] = fdn_read(k, fdn_len[k] + (k < 2u ? fdn_mo[k] : 0.0f));
             sum += y[k];
         }
         sum *= 2.0f / (float)NFDN;
@@ -652,9 +672,13 @@ static void cloud_chunk(float size, float decay_s, float damp, float shim)
             fdn_buf[k][fdn_w] = (int16_t)(clampf(fdn_lp[k] + (k & 1u ? x : -x) * 0.35f, -7.9f, 7.9f) * FDN_Q);
         }
         fdn_w = (fdn_w + 1u) % FDN_MAX;
-        cwl[i] = (y[0] + y[2] + y[4] + y[6]) * 0.35f;
-        cwr[i] = (y[1] + y[3] + y[5] + y[7]) * 0.35f;
-        sh_out = (cwl[i] + cwr[i]) * 0.5f;
+        ol = (y[0] + y[2] + y[4] + y[6]) * 0.35f;
+        or_ = (y[1] + y[3] + y[5] + y[7]) * 0.35f;
+        cwl[i] = 0.5f * (cw_last_l + ol);
+        cwr[i] = 0.5f * (cw_last_r + or_);
+        cwl[i + 1u] = cw_last_l = ol;
+        cwr[i + 1u] = cw_last_r = or_;
+        sh_out = (ol + or_) * 0.5f;
     }
     for (k = 0; k < NFDN; k++)
         fdn_lp[k] = fm_flush(fdn_lp[k]);
@@ -690,8 +714,8 @@ static void echo_chunk(float amt, float fb)
         ewr[i] = echo_lp_r * amt;
         {                                /* ping-pong: each side into the other */
             float nl = clampf(ein_l[i] + echo_lp_r * fb, -1.9f, 1.9f), nr = clampf(ein_r[i] + echo_lp_l * fb, -1.9f, 1.9f);
-            echo_l[echo_w] = (int16_t)(nl * 16384.0f);
-            echo_r[echo_w] = (int16_t)(nr * 16384.0f);
+            echo_l[echo_w] = (int16_t)(clampf(nl, -1.99f, 1.99f) * 16384.0f);   /* (in range on every CPU) */
+            echo_r[echo_w] = (int16_t)(clampf(nr, -1.99f, 1.99f) * 16384.0f);
         }
         echo_w = (echo_w + 1u) % ECHO_N;
     }
@@ -739,6 +763,11 @@ static void lfos_chunk(void)
         V.lfo[l] = lfo_v[l];
         if (tg)
             mod[tg] += lfo_v[l] * depth;
+    }
+    {                                    /* key pressure: one more source, on its own target */
+        uint32_t pt = F.p[P_PTGT] % NLTGT;
+        if (pt)
+            mod[pt] += F.press * ((float)F.p[P_PDEPTH] - 64.0f) * (1.0f / 63.0f);
     }
 }
 
@@ -866,6 +895,13 @@ static void seq_chunk(void)
     if (!F.playing) {
         sq.running = 0;
         V.step = -1;
+        if (V.sounding && F.harm_n) {    /* SPARKLE with no beat: bells now and then over the chord held */
+            float spark = u7(P_SPARKLE), rate = spark * spark * 3.0f + u7(P_SDENS) * 0.4f;
+            if (rnd01() < rate * (float)CH * INV_FS) {
+                int32_t pc = F.harm[rnd32() % F.harm_n] % 12, oct = (int32_t)(F.p[P_SOCT] % 3u);
+                shard_on(72 + pc + 12 * oct - (pc > 7 ? 12 : 0) + (rnd01() < 0.4f ? 12 : 0), 0.8f + 0.2f * rnd01());
+            }
+        }
         return;
     }
     if (!sq.running) {                   /* PLAY: from the top */
@@ -907,7 +943,7 @@ void eng_midi_clock(uint32_t status)
 }
 
 /* ------------------------------------------------------------------- render --- */
-static float pump_env, swell_ph, sink_l1, sink_l2, sink_r1, sink_r2, mf_s[4], gain_now, dc_l, dc_r, meters[6];
+static float lim_env, pump_env, swell_ph, sink_l1, sink_l2, sink_r1, sink_r2, mf_s[4], gain_now, dc_l, dc_r, meters[6];
 static svf_t df_l, df_r;                 /* the drone filter */
 static float dbuf_l[CH], dbuf_r[CH];
 static float frz_t;
@@ -995,19 +1031,20 @@ void eng_render(int32_t *lr, uint32_t n, float gain)
         {
             float cut = 30.0f * fm_powf(630.0f, u7(P_FCUT)) * fm_exp2f(mod[1] * 4.0f);
             float q = 0.5f + 18.0f * u7(P_FRES) * u7(P_FRES) * (1.0f + mod[2]);
-            svf_set(&df_l, cut, q);
+            svf_set_at(&df_l, cut, q, 2.0f * INV_FS);   /* (the drones' filter runs at their half rate) */
             df_r.a1 = df_l.a1, df_r.a2 = df_l.a2, df_r.a3 = df_l.a3, df_r.k = df_l.k;
         }
         swell_ph = wrap(swell_ph + 0.045f * (float)CH * INV_FS);
         sw = 1.0f - swell * 0.45f * (0.5f + 0.5f * fm_sin_turns(swell_ph));
         trem = 1.0f - 0.5f * (0.5f + 0.5f * mod[5]) * (mod[5] != 0.0f);
+        trem *= clampf(1.0f + mod[14], 0.0f, 2.0f);   /* DRONE LEVEL (pressure: louder as you press) */
         pan = clampf(mod[6], -1.0f, 1.0f);
         pump_env *= fm_expf(-(float)CH * INV_FS * 8.0f);
         if (drums_kicked())
             pump_env = pump;
         pg = 1.0f - 0.8f * pump_env;
-        for (i = 0; i < CH; i++) {
-            float l = dl[i] * sw * trem, r = dr[i] * sw * trem;
+        for (i = 0; i < DH; i++) {       /* the drones at their half rate: drive, filter, pan; then up to the full */
+            float l = hl[i] * sw * trem, r = hr[i] * sw * trem;
             if (fdrive > 0.01f) {
                 l = fm_tanhf(l * (1.0f + 5.0f * fdrive)) / (1.0f + 2.0f * fdrive);
                 r = fm_tanhf(r * (1.0f + 5.0f * fdrive)) / (1.0f + 2.0f * fdrive);
@@ -1018,8 +1055,14 @@ void eng_render(int32_t *lr, uint32_t n, float gain)
                 l *= 1.0f - 0.8f * (pan > 0.0f ? pan : 0.0f);
                 r *= 1.0f + 0.8f * (pan < 0.0f ? pan : 0.0f);
             }
-            dl[i] = l * mx_d;
-            dr[i] = r * mx_d;
+            l *= mx_d;
+            r *= mx_d;
+            dl[2u * i] = 0.5f * (hl_last + l);
+            dr[2u * i] = 0.5f * (hr_last + r);
+            dl[2u * i + 1u] = hl_last = l;
+            dr[2u * i + 1u] = hr_last = r;
+        }
+        for (i = 0; i < CH; i++) {
             /* the sends: the cloud, the echo */
             cin_l[i] = dl[i] * dsend + ml[i] * mx_m * msend + shl[i] * mx_s * ssend + dbuf_l[i] * drsend + bsl[i] * mx_b * 0.05f;
             cin_r[i] = dr[i] * dsend + mr[i] * mx_m * msend + shr[i] * mx_s * ssend + dbuf_r[i] * drsend + bsl[i] * mx_b * 0.05f;
@@ -1034,12 +1077,13 @@ void eng_render(int32_t *lr, uint32_t n, float gain)
             float gl = gain, sk = 12000.0f * fm_exp2f(-6.6f * fm_powf(sink, 0.75f));
             float mcut = 200.0f * fm_powf(95.0f, clampf(u7(P_MFILT) + 0.3f * mod[13], 0.0f, 1.0f));
             float drive = u7(P_TDRIVE), wob = u7(P_TWOBBLE), width = 0.5f + u7(P_WIDTH);
-            float gs, k1, k2, wl = 0.0f;
+            float gs, gn, k1, k2, wl = 0.0f;
             float ga = fm_tanf(3.14159265f * clampf(sk, 40.0f, 18000.0f) * INV_FS), ka = 1.0f / (1.0f + ga);
             float gm = fm_tanf(3.14159265f * clampf(mcut, 40.0f, 18000.0f) * INV_FS), km = gm / (1.0f + gm);
             k1 = ga * ka;
             k2 = km;
             gs = 1.0f + 5.0f * drive;
+            gn = 0.9f / fm_tanhf(gs);
             tape_ph = wrap(tape_ph + 0.33f * (float)CH * INV_FS);
             tape_ph2 = wrap(tape_ph2 + 5.1f * (float)CH * INV_FS);
             for (i = 0; i < m; i++) {
@@ -1077,8 +1121,8 @@ void eng_render(int32_t *lr, uint32_t n, float gain)
                     tape_w = (tape_w + 1u) % TAPE_N;
                 }
                 if (drive > 0.01f) {
-                    l = fm_tanhf(l * gs) / fm_tanhf(gs) * 0.9f;
-                    r = fm_tanhf(r * gs) / fm_tanhf(gs) * 0.9f;
+                    l = fm_tanhf(l * gs) * gn;
+                    r = fm_tanhf(r * gs) * gn;
                 }
                 mid = (l + r) * 0.5f;
                 side = (l - r) * 0.5f * width;
@@ -1088,6 +1132,13 @@ void eng_render(int32_t *lr, uint32_t n, float gain)
                 dc_r += (r - dc_r) * 0.0005f;
                 l -= dc_l;
                 r -= dc_r;
+                {                        /* the limiter: everything at once turned down smoothly, never crunched */
+                    float pk = fm_maxf(fm_fabsf(l), fm_fabsf(r)), g;
+                    lim_env = pk > lim_env ? lim_env + (pk - lim_env) * 0.3f : lim_env * 0.99985f;
+                    g = lim_env > 0.5f ? 0.5f / lim_env : 1.0f;
+                    l *= g;
+                    r *= g;
+                }
                 gain_now += (gl - gain_now) * 0.004f;
                 pl = sat(l * 1.1f);
                 pr = sat(r * 1.1f);

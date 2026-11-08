@@ -44,7 +44,8 @@ enum {
     P_MXDRONE, P_MXMEL, P_MXBASS, P_MXDRUM, P_MXSHARD, P_MXCLOUD,
     /* scenes */
     P_MORPH,
-    P_DRAND, P_MRAND, P_DMEVOLVE,          /* the UI's: a random drone, a random melody sound, drums that evolve */
+    P_DRAND, P_MRAND, P_DMEVOLVE,
+    P_PTGT, P_PDEPTH,                      /* key pressure: what it moves, how far */          /* the UI's: a random drone, a random melody sound, drums that evolve */
     NP
 };
 #define NSTORED P_MCUR                   /* (not a range: every setting is kept; the cursors and actions are reset) */
@@ -73,6 +74,7 @@ typedef struct {
     uint8_t harm_n;
     uint8_t playing;                     /* the transport: the sequencers and the shards run */
     uint8_t fill;                        /* a drum fill asked (the engine clears it once played) */
+    float press;                         /* the held keys' pressure (or MIDI aftertouch), 0 .. 1 */
 } floe_t;
 extern floe_t F;
 
@@ -100,11 +102,11 @@ void eng_render(int32_t *lr, uint32_t n, float gain);   /* the audio interrupt: 
 void eng_midi_clock(uint32_t status);                     /* (the audio interrupt's MIDI: F8, FA, FB, FC) */
 
 /* ------------------------------------------------------------------- harmony --- */
-#define NSCALES 12u
+#define NSCALES 21u
 #define NFIXED 33u                       /* the chords built on the note played */
 #define NAUTO 12u                        /* the chords stacked from the scale */
 #define NCHORDS (NFIXED + NAUTO)
-#define NVOICING 4u
+#define NVOICING 14u
 extern const uint8_t SCALES[NSCALES][8];       /* [0]: how many notes; then the semitones */
 extern const char *const SCALE_NAME[NSCALES];
 extern const int8_t CHORD_FIX[NFIXED][7];      /* [0]: how many; then semitones */
@@ -127,7 +129,7 @@ int32_t key_snap(int32_t n, const uint8_t *p, int32_t *deg);
 #define NBMODE 6u
 #define NKIT 4u
 #define NLSHAPE 7u
-#define NLTGT 14u
+#define NLTGT 15u
 #define NLRATE_FREE 64u                  /* LFO RATE: 0 .. 63 free (0.01 .. 20 Hz), then the synced divisions */
 #define NLDIV 10u
 extern const char *const DPRESET_NAME[NDPRESET];

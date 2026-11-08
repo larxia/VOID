@@ -15,9 +15,20 @@ const uint8_t SCALES[NSCALES][8] = {
     {5, 0, 2, 4, 7, 9, 0, 0},            /* pentatonic major */
     {5, 0, 3, 5, 7, 10, 0, 0},           /* pentatonic minor */
     {5, 0, 2, 3, 7, 8, 0, 0},            /* hirajoshi */
+    {5, 0, 1, 5, 7, 10, 0, 0},           /* in sen (Japan) */
+    {5, 0, 1, 5, 6, 10, 0, 0},           /* iwato (Japan) */
+    {5, 0, 2, 3, 7, 9, 0, 0},            /* kumoi (Japan) */
+    {5, 0, 2, 5, 7, 9, 0, 0},            /* yo (Japan) */
+    {5, 0, 1, 5, 7, 8, 0, 0},            /* miyako-bushi (Japan) */
+    {5, 0, 4, 5, 7, 11, 0, 0},           /* ryukyu (Okinawa) */
+    {5, 0, 1, 3, 7, 8, 0, 0},            /* pelog (Bali, Java) */
+    {5, 0, 4, 6, 7, 11, 0, 0},           /* chinese */
+    {7, 0, 1, 4, 5, 7, 8, 11},           /* bhairav (India) */
 };
 const char *const SCALE_NAME[NSCALES] = {"MAJOR", "MINOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYDIAN", "LOCRIAN",
-                                         "HARM MINOR", "MEL MINOR", "PENTA MAJ", "PENTA MIN", "HIRAJOSHI"};
+                                         "HARM MINOR", "MEL MINOR", "PENTA MAJ", "PENTA MIN", "HIRAJOSHI",
+                                         "IN SEN", "IWATO", "KUMOI", "YO", "MIYAKO-BUSHI", "RYUKYU", "PELOG",
+                                         "CHINESE", "BHAIRAV"};
 
 /* FOLLOW NOTE: built on the note played */
 const int8_t CHORD_FIX[NFIXED][7] = {
@@ -43,7 +54,8 @@ const char *const CHORD_NAME[NCHORDS] = {
     "DOM 9", "9SUS4", "MIN MAJ9", "MINOR 11", "MAJ7#11", "MAJ13", "MINOR 13", "QUARTAL", "QUARTAL 4", "ADD2",
     "KEY TRIAD", "KEY 7TH", "KEY 9TH", "KEY ADD9", "KEY 11TH", "KEY SUS2", "KEY SUS4", "KEY 6TH", "KEY SHELL",
     "KEY QUARTAL", "KEY CLUSTER", "KEY 5TH"};
-const char *const VOICING_NAME[NVOICING] = {"CLOSE", "OPEN", "DROP 2", "WIDE"};
+const char *const VOICING_NAME[NVOICING] = {"CLOSE", "OPEN", "DROP 2", "WIDE", "DROP 3", "1ST INVERSION", "2ND INVERSION",
+                                             "ROOTLESS", "LOW ROOT", "HIGH", "SPREAD", "OCTAVES", "SHIMMER", "FIFTH BASS"};
 
 int32_t scale_len(uint32_t scale) { return SCALES[scale % NSCALES][0]; }
 
@@ -95,6 +107,35 @@ uint32_t chord_build(int32_t root, int32_t d, const uint8_t *p, int8_t *out)
         if (n > 1 && n < 8)
             semi[n++] = -12;
     }
+    else if (v == 4u && n > 3)           /* DROP 3: the third from the top down an octave */
+        semi[n - 3] -= 12;
+    else if (v == 5u && n > 1)           /* 1ST INVERSION: the root up an octave */
+        semi[0] += 12;
+    else if (v == 6u && n > 2) {         /* 2ND INVERSION: the two lowest up */
+        semi[0] += 12;
+        semi[1] += 12;
+    } else if (v == 7u && n > 2) {       /* ROOTLESS: the root left to the bass */
+        for (i = 0; i + 1 < n; i++)
+            semi[i] = semi[i + 1];
+        n--;
+    } else if (v == 8u && n < 8) {       /* LOW ROOT: the root again, an octave under */
+        semi[n++] = -12;
+    } else if (v == 9u) {                /* HIGH: all an octave up */
+        for (i = 0; i < n; i++)
+            semi[i] += 12;
+    } else if (v == 10u) {               /* SPREAD: each next note an octave further out (two octaves and more) */
+        for (i = 1; i < n; i++)
+            semi[i] += 12 * (i / 2 + (i & 1));
+    } else if (v == 11u) {               /* OCTAVES: the chord doubled an octave up (as many as fit) */
+        int32_t m = n;
+        for (i = 0; i < m && n < 8; i++)
+            semi[n++] = semi[i] + 12;
+    } else if (v == 12u && n < 7) {      /* SHIMMER: the root two octaves up and a fifth above that */
+        semi[n++] = 24;
+        semi[n++] = 31;
+    } else if (v == 13u && n < 8) {      /* FIFTH BASS: a fifth under the root, an octave down */
+        semi[n++] = -17;
+    }
     for (i = 0; i < n; i++) {            /* (no note twice) */
         int32_t x = root + semi[i];
         if (x < 12 || x > 115)
@@ -145,7 +186,7 @@ const char *const KIT_NAME[NKIT] = {"SOFT", "LOFI", "808", "GLITCH"};
 const char *const LSHAPE_NAME[NLSHAPE] = {"SINE", "TRIANGLE", "SAW UP", "SAW DOWN", "SQUARE", "RANDOM", "SMOOTH RND"};
 const char *const LTGT_NAME[NLTGT] = {"OFF", "FILTER", "RESONANCE", "DRONE TONE", "VIBRATO", "TREMOLO", "DRONE PAN",
                                       "CLOUD", "SHIMMER", "ECHO WARBLE", "BASS FILTER", "MELODY TONE", "PARTIALS",
-                                      "MASTER FILT"};
+                                      "MASTER FILT", "DRONE LEVEL"};
 const char *const LDIV_NAME[NLDIV] = {"8 BARS", "4 BARS", "2 BARS", "1 BAR", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16"};
 const float LDIV_BEATS[NLDIV] = {32.0f, 16.0f, 8.0f, 4.0f, 2.0f, 1.0f, 0.6666667f, 0.5f, 0.3333333f, 0.25f};
 
