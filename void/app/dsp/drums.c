@@ -30,14 +30,14 @@ static float bus_l[DM_BUF], bus_r[DM_BUF];
 static float lp_l, lp_r, peak;
 
 /* -60 dB over sec seconds, a sample's factor */
-static float fall(float sec)
+RAM static float fall(float sec)
 {
     if (sec < 0.002f)
         sec = 0.002f;
     return fm_expf(-6.9f * BR_INV_FS / sec);
 }
 
-static void filter(dvoice_t *d, int type, float hz, float q)
+RAM static void filter(dvoice_t *d, int type, float hz, float q)
 {
     float g, lim = 0.45f * BR_FS;
     hz = hz < 20.0f ? 20.0f : hz > lim ? lim : hz;
@@ -58,9 +58,9 @@ static inline float svf(dvoice_t *d, float x)
     return d->flt == 0 ? v2 : d->flt == 1 ? v1 : x - d->k * v1 - v2;
 }
 
-static float rnd_between(float a, float b) { return a + (b - a) * (0.5f + 0.5f * br_randf(&drng)); }
+RAM static float rnd_between(float a, float b) { return a + (b - a) * (0.5f + 0.5f * br_randf(&drng)); }
 
-void drums_reset(void)
+RAM void drums_reset(void)
 {
     uint32_t i;
     for (i = 0; i < DM_NV; i++)
@@ -68,7 +68,7 @@ void drums_reset(void)
     lp_l = lp_r = peak = 0.0f;
 }
 
-void drums_hit(uint32_t v, float vel)
+RAM void drums_hit(uint32_t v, float vel)
 {
     dvoice_t *d;
     int kit;
@@ -181,7 +181,7 @@ static inline float clap_env(dvoice_t *d)
     return d->namp;
 }
 
-void drums_render(float *l, float *r, uint32_t n, float level)
+RAM void drums_render(float *l, float *r, uint32_t n, float level)
 {
     uint32_t v, i, j, any = 0;
     float lv = level * level * 1.2f;
@@ -267,7 +267,7 @@ void drums_render(float *l, float *r, uint32_t n, float level)
     }
 }
 
-int drums_kicked(void)
+RAM int drums_kicked(void)
 {
     int k = kicked;
     kicked = 0;

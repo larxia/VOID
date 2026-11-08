@@ -45,7 +45,8 @@ enum {
     /* scenes */
     P_MORPH,
     P_DRAND, P_MRAND, P_DMEVOLVE,
-    P_PTGT, P_PDEPTH,                      /* key pressure: what it moves, how far */          /* the UI's: a random drone, a random melody sound, drums that evolve */
+    P_PTGT, P_PDEPTH,                      /* key pressure: what it moves, how far */
+    P_KEYPLAY,                             /* the keys play: the chords, the melody's sound, or both */          /* the UI's: a random drone, a random melody sound, drums that evolve */
     NP
 };
 #define NSTORED P_MCUR                   /* (not a range: every setting is kept; the cursors and actions are reset) */
@@ -89,11 +90,13 @@ typedef struct {
     int8_t vnote[8];                     /* each drone voice's note (-1 free) and level, for the screen */
     float vlvl[8];
     uint32_t xruns;
+    float sfrac;                         /* how far into the step playing, 0 .. 1 (recording rounds by it) */
 } floe_view_t;
 extern volatile floe_view_t V;
 
 /* events from the UI to the engine (a ring) */
-enum { EV_DRONE_ON = 1, EV_DRONE_OFF, EV_ALL_OFF, EV_MEL, EV_BASS, EV_DRUM, EV_SHARD, EV_PANIC, EV_START, EV_STOP };
+enum { EV_DRONE_ON = 1, EV_DRONE_OFF, EV_ALL_OFF, EV_MEL, EV_BASS, EV_DRUM, EV_SHARD, EV_PANIC, EV_START, EV_STOP,
+       EV_MEL_ON, EV_MEL_OFF };      /* (the melody played live: held until its off) */
 void eng_event(uint32_t type, int32_t a, float b);
 
 void eng_init(void);

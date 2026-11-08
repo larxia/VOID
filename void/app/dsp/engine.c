@@ -31,7 +31,7 @@ static inline float sat(float x) { x = clampf(x, -1.5f, 1.5f); return x - 0.1481
 
 /* a TPT state-variable filter: its coefficients for a cutoff (Hz) and a Q, then a sample through it */
 typedef struct { float a1, a2, a3, k, s1, s2; } svf_t;
-static void svf_set_at(svf_t *f, float hz, float q, float inv_fs)   /* (at a rate: the drones run at half) */
+RAM static void svf_set_at(svf_t *f, float hz, float q, float inv_fs)   /* (at a rate: the drones run at half) */
 {
     float g;
     hz = clampf(hz, 16.0f, 0.43f / inv_fs);
@@ -42,7 +42,7 @@ static void svf_set_at(svf_t *f, float hz, float q, float inv_fs)   /* (at a rat
     f->a3 = g * f->a2;
 }
 /* mode 0 low, 1 band, 2 high, 3 notch */
-static void svf_set(svf_t *f, float hz, float q) { svf_set_at(f, hz, q, INV_FS); }
+RAM static void svf_set(svf_t *f, float hz, float q) { svf_set_at(f, hz, q, INV_FS); }
 static inline float svf(svf_t *f, float x, int mode)
 {
     float v3 = x - f->s2, v1 = f->a1 * f->s1 + f->a2 * v3, v2 = f->s2 + f->a2 * f->s1 + f->a3 * v3;
@@ -90,6 +90,20 @@ void eng_event(uint32_t type, int32_t a, float b)
     ev_w++;
 }
 
+/* the two of tables.c's helpers the audio path needs, here in RAM (the tables they read may stay in the flash) */
+static inline int32_t eng_scale_deg(uint32_t scale, int32_t d)
+{
+    int32_t n = SCALES[scale % NSCALES][0], o = d >= 0 ? d / n : -((-d + n - 1) / n), k = d - o * n;
+    return SCALES[scale % NSCALES][1 + k] + 12 * o;
+}
+static inline float eng_lfo_hz(uint32_t rate, float bpm)
+{
+    if (rate < NLRATE_FREE)
+        return 0.01f * fm_powf(2000.0f, (float)rate / (float)(NLRATE_FREE - 1u));
+    rate -= NLRATE_FREE;
+    return bpm / 60.0f / LDIV_BEATS[rate < NLDIV ? rate : NLDIV - 1u];
+}
+
 /* ------------------------------------------------------------------- modulation --- */
 static float mod[NLTGT];                 /* each LFO TARGET's sum now, -1 .. 1 scaled by depth */
 static float lfo_ph[3], lfo_v[3], lfo_r[3][2];
@@ -116,7 +130,7 @@ static float dl[CH], dr[CH];             /* the drones' chunk */
 #define DH (CH / 2u)                     /* the drones run at half the rate (22.05 kHz: soft pads, filtered), then up */
 static float hl[DH], hr[DH], hl_last, hr_last;
 
-static void drone_on(int note, float vel)
+RAM static void drone_on(int note, float vel)
 {
     uint32_t i, k;
     dvoice_t *v = 0;
@@ -158,7 +172,7 @@ static void drone_on(int note, float vel)
         v->pr = fm_sinf((p + 1.0f) * 0.7853982f);
     }
 }
-static void drone_off(int note)
+RAM static void drone_off(int note)
 {
     uint32_t i;
     for (i = 0; i < NDV; i++)
@@ -167,7 +181,7 @@ static void drone_off(int note)
 }
 
 /* a chunk of every drone voice into dl, dr */
-static void drones_chunk(void)
+RAM static void drones_chunk(void)
 {
     uint32_t i, j, k;
     float choir = u7(P_CHOIR), part = u7(P_PARTIALS), breath = u7(P_BREATH), timbre = u7(P_TIMBRE);
@@ -311,7 +325,7 @@ static const msound_t MS[NMSOUND] = {
     /* SINE LEAD */ {0, 0, 0, 0, 0, 2.0f, 0.06f, 9.0f, 0, 0, 0, 0.7f, 0.02f, 0.2f, 0.9f, 0.2f, 0.18f, 0, 0, 0, 1.0f},
     /* WARM PAD */ {5, 0, 0, 0, 0, 0.5f, 0.3f, 9.0f, 1.5f, 1.0f, 1.5f, 0.7f, 0.5f, 0.6f, 0.9f, 1.5f, 0.05f, 0, 0, 0, 0.6f},
 };
-#define NMV 2u
+#define NMV 4u                          /* (the sequence's notes and the ones played live) */
 typedef struct {
     int16_t note;
     uint8_t gate;
@@ -320,15 +334,24 @@ typedef struct {
     svf_t flt;
     const msound_t *s;
     float vel;
+    uint8_t live;                        /* played on the keys: held until its key lets go */
 } mvoice_t;
 static mvoice_t mv[NMV];
 static uint32_t mv_next;
 static float mel_last_f;
 static float ml[CH], mr[CH];
 
-static void mel_on(int note, float vel)
+RAM static void mel_on(int note, float vel, int live)
 {
-    mvoice_t *v = &mv[mv_next++ % NMV];
+    mvoice_t *v = 0;
+    uint32_t i;
+    for (i = 0; i < NMV && !v; i++)      /* a free voice, else the next in turn */
+        if (!mv[(mv_next + i) % NMV].gate && mv[(mv_next + i) % NMV].env < 0.01f)
+            v = &mv[(mv_next + i) % NMV];
+    if (!v)
+        v = &mv[mv_next % NMV];
+    mv_next++;
+    v->live = (uint8_t)live;
     const msound_t *s = &MS[F.p[P_MSOUND] % NMSOUND];
     float f = mtof((float)note), gl = u7(P_MGLIDE);
     v->s = s;
@@ -347,14 +370,15 @@ static void mel_on(int note, float vel)
     v->mph = v->p2 = v->vph = 0.0f;
     v->flt.s1 = v->flt.s2 = 0.0f;
 }
-static void mel_off_all(void)
+RAM static void mel_off_all(void)
 {
     uint32_t i;
     for (i = 0; i < NMV; i++)
-        mv[i].gate = 0;
+        if (!mv[i].live)                 /* (the notes held on the keys ring on) */
+            mv[i].gate = 0;
 }
 
-static void mel_chunk(void)
+RAM static void mel_chunk(void)
 {
     uint32_t i, j, k;
     float tone = clampf(u7(P_MTONE) + 0.5f * mod[11], 0.0f, 1.0f), tk = 0.3f + 1.7f * tone;
@@ -457,7 +481,7 @@ static struct {
 } bs = {-1, 0, 0, 0, 0, 0, {0}, 0, {0}};
 static float bsl[CH];
 
-static void bass_on(int note, float len)
+RAM static void bass_on(int note, float len)
 {
     float gl = u7(P_BGLIDE);
     bs.f = mtof((float)note);
@@ -467,7 +491,7 @@ static void bass_on(int note, float len)
     bs.t = 0.0f;
     bs.len = len;
 }
-static void bass_chunk(void)
+RAM static void bass_chunk(void)
 {
     uint32_t i;
     float ct = (float)CH * INV_FS, gl = u7(P_BGLIDE), e1, de, dt, g, kgl;
@@ -533,7 +557,7 @@ typedef struct {
 static svoice_t sv[NSV];
 static uint32_t sv_next;
 static float shl[CH], shr[CH];
-static void shard_on(int note, float vel)
+RAM static void shard_on(int note, float vel)
 {
     const float *p = SP[F.p[P_SPRESET] % NSPRESET];
     float spark = u7(P_SPARKLE), ring = 0.3f + 1.5f * u7(P_SRING);
@@ -548,7 +572,7 @@ static void shard_on(int note, float vel)
     v->amp = vel * (0.08f + 0.06f * rnd01());
     v->on = 1;
 }
-static void shards_chunk(void)
+RAM static void shards_chunk(void)
 {
     uint32_t i, j;
     float ct = (float)CH * INV_FS;
@@ -611,7 +635,7 @@ static inline float fdn_read(uint32_t k, float len)
 }
 
 static float cw_last_l, cw_last_r, fdn_mo[2];
-static void cloud_chunk(float size, float decay_s, float damp, float shim)
+RAM static void cloud_chunk(float size, float decay_s, float damp, float shim)
 {
     uint32_t i, k;
     float g[NFDN], lp = 0.08f + 0.85f * (1.0f - damp), fz = frz, in_g = 1.0f - fz;
@@ -691,7 +715,7 @@ static uint32_t echo_w;
 static float echo_len, echo_lp_l, echo_lp_r;
 static float ein_l[CH], ein_r[CH], ewl[CH], ewr[CH];
 static const float ECHO_BEATS[8] = {0.25f, 0.5f, 0.3333333f, 0.75f, 1.0f, 1.5f, 0.6666667f, 2.0f};
-static void echo_chunk(float amt, float fb)
+RAM static void echo_chunk(float amt, float fb)
 {
     uint32_t i;
     float beats = ECHO_BEATS[F.p[P_ETIME] % 8u], target = beats * 60.0f / bpm_now * FS, warble = mod[9];
@@ -730,7 +754,7 @@ static uint32_t tape_w;
 static float tape_ph, tape_ph2;
 
 /* ------------------------------------------------------------------- the LFOs --- */
-static void lfos_chunk(void)
+RAM static void lfos_chunk(void)
 {
     uint32_t l, k;
     float ct = (float)CH * INV_FS;
@@ -738,7 +762,7 @@ static void lfos_chunk(void)
         mod[k] = 0.0f;
     for (l = 0; l < 3u; l++) {
         int base = P_L1SHAPE + 4 * (int)l, sh = F.p[base] % NLSHAPE, tg = F.p[base + 3] % NLTGT;
-        float hz = lfo_hz(F.p[base + 1], bpm_now), p, v, depth = ((float)F.p[base + 2] - 64.0f) * (1.0f / 63.0f);
+        float hz = eng_lfo_hz(F.p[base + 1], bpm_now), p, v, depth = ((float)F.p[base + 2] - 64.0f) * (1.0f / 63.0f);
         lfo_ph[l] += hz * ct;
         if (lfo_ph[l] >= 1.0f) {
             lfo_ph[l] -= (float)(int32_t)lfo_ph[l];
@@ -786,9 +810,9 @@ static struct {
     uint8_t ext_run;
 } sq;
 
-static float swing_off(int32_t s, float sps) { return (s & 1) ? u7(P_SWING) * 0.33f * sps : 0.0f; }
+RAM static float swing_off(int32_t s, float sps) { return (s & 1) ? u7(P_SWING) * 0.33f * sps : 0.0f; }
 
-static void seq_step(int32_t abs_step)
+RAM static void seq_step(int32_t abs_step)
 {
     uint32_t s = (uint32_t)abs_step % NSTEP, t;
     float h = u7(P_DMHUMAN), spark = u7(P_SPARKLE);
@@ -860,14 +884,14 @@ static void seq_step(int32_t abs_step)
     }
     /* the melody */
     if (F.p[P_MPLAYS] && F.pat.mel[s] != MEL_REST && F.pat.mel[s] >= 0) {
-        int32_t root = (int32_t)(F.p[P_ROOT] % 12u), note = 60 + root + scale_deg(F.p[P_SCALE], F.pat.mel[s]) +
+        int32_t root = (int32_t)(F.p[P_ROOT] % 12u), note = 60 + root + eng_scale_deg(F.p[P_SCALE], F.pat.mel[s]) +
                                                          12 * ((int32_t)F.p[P_MOCT] - 1) - (root > 5 ? 12 : 0);
         float vel = 1.0f - u7(P_MHUMAN) * 0.4f * rnd01();
         uint32_t gap = 1;
         while (gap < NSTEP && F.pat.mel[(s + gap) % NSTEP] == MEL_REST)
             gap++;
         mel_off_all();
-        mel_on(note, vel);
+        mel_on(note, vel, 0);
         (void)gap;
     } else if (F.p[P_MPLAYS] && (s % 2u) == 0u) {
         /* a rest: the note held through, let go by LENGTH below */
@@ -886,7 +910,7 @@ static void seq_step(int32_t abs_step)
 /* the melody's notes let go after LENGTH (the next note or LENGTH's share of the gap, whichever first) */
 static float mel_gate_left;
 
-static void seq_chunk(void)
+RAM static void seq_chunk(void)
 {
     float bpm = F.p[P_CLOCK] && sq.ext_period > 1.0f ? FS * 60.0f / (sq.ext_period * 24.0f) : (float)(F.p[P_TEMPO] + 40u);
     float sps = FS * 60.0f / (bpm * 4.0f);   /* samples a sixteenth */
@@ -930,6 +954,7 @@ static void seq_chunk(void)
             mel_off_all();
     }
     sq.pos += (float)CH / sps;
+    V.sfrac = clampf(sq.pos + 1.0f, 0.0f, 1.0f);
 }
 
 void eng_midi_clock(uint32_t status)
@@ -948,7 +973,7 @@ static svf_t df_l, df_r;                 /* the drone filter */
 static float dbuf_l[CH], dbuf_r[CH];
 static float frz_t;
 
-static void events(void)
+RAM static void events(void)
 {
     while (ev_r != ev_w) {
         ev_t e = evq[ev_r % NEV];
@@ -963,7 +988,15 @@ static void events(void)
                 dv[i].gate = 0;
             break;
         }
-        case EV_MEL: if (e.b > 0.0f) { mel_off_all(); mel_on(e.a, e.b); mel_gate_left = 0.35f; } break;
+        case EV_MEL: if (e.b > 0.0f) { mel_off_all(); mel_on(e.a, e.b, 0); mel_gate_left = 0.35f; } break;
+        case EV_MEL_ON: mel_on(e.a, e.b, 1); break;
+        case EV_MEL_OFF: {
+            uint32_t i;
+            for (i = 0; i < NMV; i++)
+                if (mv[i].live && mv[i].note == e.a)
+                    mv[i].gate = 0, mv[i].live = 0;
+            break;
+        }
         case EV_BASS: bass_on(e.a, e.b); break;
         case EV_DRUM: drums_hit((uint32_t)e.a, e.b); break;
         case EV_SHARD: shard_on(e.a, e.b); break;
@@ -995,11 +1028,11 @@ void eng_init(void)
     for (i = 0; i < NFDN; i++)
         fdn_len[i] = (float)FDN_LEN[i];
     echo_len = 0.5f * FS;
-    drums_reset();
+    PLAT_FAR(drums_reset)();             /* (RAM code: from the flash, through a pointer) */
     V.step = -1;
 }
 
-void eng_render(int32_t *lr, uint32_t n, float gain)
+RAM void eng_render(int32_t *lr, uint32_t n, float gain)
 {
     uint32_t off;
     events();
