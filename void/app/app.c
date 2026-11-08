@@ -131,6 +131,8 @@ static const pd_t PD[NP] = {
     [P_DRAND] = {"RANDOM DRONE", 1, 0, FM_DICE, 0},
     [P_MRAND] = {"RANDOM SOUND", 1, 0, FM_DICE, 0},
     [P_DMEVOLVE] = {"EVOLVE", 1, 0, FM_ONOFF, 0},
+    [P_PTGT] = {"PRESSURE", NLTGT - 1, 14, FM_NAMES, LTGT_NAME},
+    [P_PDEPTH] = {"PRESS DEPTH", 127, 110, FM_BIPOLAR, 0},
 };
 static const uint16_t MORPH_MS[9] = {0, 500, 1000, 2000, 4000, 8000, 15000, 30000, 60000};
 
@@ -144,14 +146,16 @@ typedef struct {
 } page_t;
 #define NONE NP
 static const page_t PAGES[] = {
-    {"PLAY", B_HOME, V_RIVER, K_DRONE, {P_CHORD, P_VOICING, P_HARM, P_HOLD}},
+    {"PLAY", B_HOME, V_RIVER, K_DRONE, {P_CHORD, P_HARM, P_HOLD, P_LATCH}},
     {"SOUND", B_HOME, V_RIVER, K_DRONE, {P_ATTACK, P_RELEASE, P_DETUNE, P_FCUT}},
-    {"SOUND II", B_HOME, V_RIVER, K_DRONE, {P_DPRESET, P_TONE, P_DMOTION, P_DRAND}},
+    {"SOUND II", B_HOME, V_RIVER, K_DRONE, {P_DPRESET, P_VOICING, P_DMOTION, P_DRAND}},
     {"SPACE", B_HOME, V_RIVER, K_DRONE, {P_CAMT, P_SHIM, P_EAMT, P_FREEZE}},
+    {"KEY & TOUCH", B_HOME, V_RIVER, K_DRONE, {P_ROOT, P_SCALE, P_PTGT, P_PDEPTH}},
     {"MIXER", B_HOME, V_MIXER, K_DRONE, {P_MXDRONE, P_MXMEL, P_MXBASS, P_MXDRUM}},
     {"MIXER II", B_HOME, V_MIXER, K_DRONE, {P_MXSHARD, P_MXCLOUD, P_PUMP, P_WIDTH}},
     {"HARMONY", B_SEL, V_RIVER, K_DRONE, {P_ROOT, P_SCALE, P_CHORD, P_VOICING}},
     {"KEYS", B_SEL, V_RIVER, K_DRONE, {P_HARM, P_HOLD, P_LATCH, P_SPREAD_OCT}},
+    {"TOUCH", B_SEL, V_RIVER, K_DRONE, {P_PTGT, P_PDEPTH, P_SCALE, P_ROOT}},
     {"DRONE", B_EDIT, V_RIVER, K_DRONE, {P_DPRESET, P_CHOIR, P_PARTIALS, P_BREATH}},
     {"DRONE II", B_EDIT, V_RIVER, K_DRONE, {P_TIMBRE, P_TONE, P_DETUNE, P_DMOTION}},
     {"DRONE III", B_EDIT, V_RIVER, K_DRONE, {P_ATTACK, P_RELEASE, P_SPREAD_OCT, P_DRAND}},
@@ -186,7 +190,7 @@ static const page_t PAGES[] = {
 #define PG_SCENES (NPAGES - 1u)
 
 /* ------------------------------------------------------------------- state --- */
-#define STATE_MAGIC 0x32454C46u          /* "FLE2" */
+#define STATE_MAGIC 0x33454C46u          /* "FLE3" */
 #define NSCN 8u
 typedef struct {
     uint8_t p[NP];
@@ -238,6 +242,7 @@ static struct {
     float morph_from[NP], morph_to[NP];
     uint8_t morphing;
     uint8_t clear_arm;
+    uint8_t at;                          /* MIDI aftertouch in */
     uint32_t clear_at;
 } ui;
 
@@ -1093,18 +1098,11 @@ static void page_button(uint32_t b)
         }
     }
 }
-static void page_step(int32_t d)         /* SELECT: the pages of this button, round */
+static void page_step(int32_t d)         /* SELECT: through every page, in order (HOME .. SCENES), round */
 {
-    uint32_t b = PAGES[pg].button, i, q = pg;
-    for (i = 0; i < NPAGES; i++) {
-        q = (q + NPAGES + (uint32_t)(d > 0 ? 1 : -1)) % NPAGES;
-        if (PAGES[q].button == b) {
-            pg = q;
-            ui.touched = -1;
-            ui.redraw = 1;
-            return;
-        }
-    }
+    pg = (pg + NPAGES + (uint32_t)(d > 0 ? 1 : -1)) % NPAGES;
+    ui.touched = -1;
+    ui.redraw = 1;
 }
 
 static void input(void)
@@ -1198,6 +1196,10 @@ static void input(void)
             play_note(100 + (int32_t)d1, (int32_t)d1, 0.35f + 0.65f * (float)d2 / 127.0f);
         else if ((s & 0xF0u) == 0x80u || (s & 0xF0u) == 0x90u)
             release_note(100 + (int32_t)d1);
+        else if ((s & 0xF0u) == 0xD0u)   /* channel aftertouch: pressure */
+            ui.at = (uint8_t)d1;
+        else if ((s & 0xF0u) == 0xA0u)   /* poly aftertouch */
+            ui.at = (uint8_t)d2;
         else if ((s & 0xF0u) == 0xB0u && d1 == 64u)
             F.p[P_FREEZE] = d2 >= 64u;
         else if ((s & 0xF0u) == 0xB0u && d1 == 1u)
@@ -1208,6 +1210,19 @@ static void input(void)
         F.playing = ui.ext_play == 1u;
         ui.ext_play = 0;
         ui.redraw = 1;
+    }
+    {                                    /* pressure: the hardest-pressed key held on a playing page, smoothed */
+        uint32_t pmax = 0;
+        if (PAGES[pg].keys == K_DRONE)
+            for (k = 0; k < NKEYS; k++)
+                if (keys >> k & 1u) {
+                    uint32_t pr = touch_pressure(k);
+                    pmax = pr > pmax ? pr : pmax;
+                }
+        if (pmax || ui.at == 0u)
+            F.press += ((float)pmax / 127.0f - F.press) * 0.25f;
+        else
+            F.press += ((float)ui.at / 127.0f - F.press) * 0.25f;
     }
     if (keys != ui.keys || btn != ui.btn)
         ui.redraw = 1;
@@ -1317,6 +1332,14 @@ static void draw_header(void)
         cv_text(x, 9, &FONT_S, t, F.playing ? C_AMBER : C_SLATE);
         if (F.p[P_FREEZE])
             cv_text(x - 34, 9, &FONT_S, "FRZ", C_ICE);
+        if (PAGES[pg].button == B_GLO) { /* GLOBAL: how hard the sound works the FM-1 (and its late blocks) */
+            uint32_t c = plat_cpu_pct();
+            t[0] = 0;
+            tcat(t, "CPU ");
+            itxt((int32_t)c, t + 4);
+            tcat(t, "%");
+            cv_text(x - 46 - tw(&FONT_S, t), 9, &FONT_S, t, c > 85u ? C_AMBER : C_MIST);
+        }
     }
     box(0, 29, 240, 1, C_RULE);
     cv_blit(0, 0);
@@ -1339,7 +1362,7 @@ void app_splash(void)                    /* the first screen at boot */
 
 void app_overload(void)                  /* the render ran late: a drone voice fewer (the main loop gives it back) */
 {
-    if (eng_maxdv > 4u)
+    if (eng_maxdv > 3u)
         eng_maxdv--;
 }
 
@@ -1638,7 +1661,7 @@ void app_frame(void)
     if (now - cpu_at >= 400u) {          /* the CPU guard: fewer drone voices while the audio runs late */
         uint32_t c = plat_cpu_pct();
         cpu_at = now;
-        if (c > 88u && eng_maxdv > 4u)
+        if (c > 85u && eng_maxdv > 3u)
             eng_maxdv--;
         else if (c < 65u && eng_maxdv < 8u)
             eng_maxdv++;
@@ -1660,7 +1683,7 @@ void app_frame(void)
         last_vis = now;
         draw_view();
         if (PAGES[pg].view == V_RIVER && now % 1000u < 60u)
-            draw_header();
+            draw_header();             /* (the tempo, the CPU on GLOBAL: once a second) */
     }
 }
 
@@ -1696,6 +1719,8 @@ int app_expect(const char *what, int *got)
         *got = F.pat.drum[(what[4] - '0') % NDRUM][atoi(what + 5) % NSTEP];
     else if (!strcmp(what, "used"))
         *got = (int)scn.used;
+    else if (!strcmp(what, "press"))
+        *got = (int)(F.press * 100.0f + 0.5f);
     else if (!strcmp(what, "octave"))
         *got = st.octave;
     else if (!strcmp(what, "bpm"))
