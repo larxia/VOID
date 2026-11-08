@@ -1,5 +1,7 @@
 # VOID
 
+![VØID, ambient groovebox for the M-VAVE FM-1](manual/img/logo.png "VØID")
+
 VOID is an ambient instrument for the M-VAVE FM-1. The keys play slow drones as chords that follow the note you
 press, as add9s, 9ths, minors and 40 more, held one at a time or layered. Around them run a melody sequencer with 24
 sounds, a bass that follows your chords or plays your own notes, a drum machine with four kits, a shimmer cloud with
