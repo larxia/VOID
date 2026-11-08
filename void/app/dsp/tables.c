@@ -165,24 +165,58 @@ int32_t key_snap(int32_t n, const uint8_t *p, int32_t *deg)
 }
 
 /* ------------------------------------------------------------------- names --- */
-const char *const DPRESET_NAME[NDPRESET] = {"CHOIR OF ICE", "DEEP RIVER", "FROZEN BELL", "BREATH", "AURORA", "LOW HUM",
-                                            "GLASS ORGAN", "SNOWFIELD", "NIGHT AIR", "THAW", "POLAR", "EMBER"};
-/* choir, partials, breath, timbre, tone, detune, attack, release, motion, (filter cutoff) */
-const uint8_t DPRESET_V[NDPRESET][10] = {
-    {89, 51, 25, 44, 57, 51, 57, 70, 40, 110}, {102, 38, 13, 19, 32, 70, 70, 83, 50, 90},
-    {19, 108, 13, 108, 76, 25, 32, 76, 30, 120}, {25, 25, 114, 51, 64, 38, 64, 76, 60, 110},
-    {76, 76, 32, 76, 83, 64, 76, 89, 70, 115}, {70, 89, 6, 6, 23, 32, 51, 64, 20, 80},
-    {13, 114, 6, 64, 70, 13, 25, 51, 25, 127}, {57, 44, 76, 89, 89, 57, 89, 102, 60, 120},
-    {44, 32, 89, 32, 44, 44, 76, 89, 55, 100}, {108, 57, 19, 57, 70, 89, 44, 64, 45, 110},
-    {51, 95, 38, 121, 102, 38, 64, 108, 65, 127}, {114, 25, 25, 38, 51, 76, 38, 57, 35, 100}};
+const char *const DPRESET_NAME[NDPRESET] = {
+    "CHOIR OF ICE", "DEEP RIVER", "FROZEN BELL", "BREATH", "AURORA", "LOW HUM", "GLASS ORGAN", "SNOWFIELD", "NIGHT AIR",
+    "THAW", "POLAR", "EMBER",
+    "SOFT SINE", "WARM PAD", "VELVET", "HOLLOW", "ORGAN DRONE", "TEMPLE BELLS", "GLASS HARMONICA", "FIFTHS", "DEEP SUB",
+    "FM PAD", "DX GLASS", "LULLABY", "MIST", "DUSK STRINGS", "CLARINET HAZE", "GAMELAN"};
+/* choir, partials, breath, timbre, tone, detune, attack, release, motion, cut, wave, series */
+const uint8_t DPRESET_V[NDPRESET][12] = {
+    {89, 51, 25, 44, 57, 51, 57, 70, 40, 110, 0, 0}, {102, 38, 13, 19, 32, 70, 70, 83, 50, 90, 0, 0},
+    {19, 108, 13, 108, 76, 25, 32, 76, 30, 120, 0, 0}, {25, 25, 114, 51, 64, 38, 64, 76, 60, 110, 0, 0},
+    {76, 76, 32, 76, 83, 64, 76, 89, 70, 115, 0, 0}, {70, 89, 6, 6, 23, 32, 51, 64, 20, 80, 0, 0},
+    {13, 114, 6, 64, 70, 13, 25, 51, 25, 127, 0, 0}, {57, 44, 76, 89, 89, 57, 89, 102, 60, 120, 0, 0},
+    {44, 32, 89, 32, 44, 44, 76, 89, 55, 100, 0, 0}, {108, 57, 19, 57, 70, 89, 44, 64, 45, 110, 0, 0},
+    {51, 95, 38, 121, 102, 38, 64, 108, 65, 127, 0, 0}, {114, 25, 25, 38, 51, 76, 38, 57, 35, 100, 0, 0},
+    {90, 40, 10, 20, 40, 30, 70, 80, 40, 100, 4, 0},     /* SOFT SINE */
+    {100, 30, 15, 30, 35, 50, 65, 75, 45, 85, 1, 0},     /* WARM PAD */
+    {100, 20, 20, 25, 30, 60, 60, 80, 50, 80, 2, 0},     /* VELVET */
+    {80, 50, 10, 40, 35, 35, 55, 70, 35, 80, 3, 1},      /* HOLLOW */
+    {50, 100, 5, 60, 50, 15, 40, 60, 20, 100, 4, 2},     /* ORGAN DRONE */
+    {30, 110, 10, 50, 50, 20, 30, 100, 60, 110, 4, 4},   /* TEMPLE BELLS */
+    {40, 100, 15, 40, 60, 25, 60, 90, 50, 110, 4, 5},    /* GLASS HARMONICA */
+    {70, 80, 10, 40, 45, 30, 60, 80, 40, 95, 2, 3},      /* FIFTHS */
+    {60, 90, 5, 10, 25, 20, 50, 70, 30, 70, 4, 6},       /* DEEP SUB */
+    {100, 20, 10, 30, 45, 40, 60, 80, 40, 95, 5, 0},     /* FM PAD */
+    {70, 60, 5, 50, 60, 20, 40, 90, 30, 115, 5, 5},      /* DX GLASS */
+    {70, 50, 20, 25, 30, 25, 75, 100, 30, 75, 2, 2},     /* LULLABY */
+    {50, 20, 80, 20, 30, 40, 90, 110, 70, 70, 4, 0},     /* MIST */
+    {110, 15, 25, 30, 50, 70, 70, 80, 55, 90, 1, 0},     /* DUSK STRINGS */
+    {60, 70, 30, 30, 40, 20, 50, 70, 30, 85, 3, 1},      /* CLARINET HAZE */
+    {50, 100, 5, 60, 55, 15, 20, 90, 40, 110, 5, 4}};    /* GAMELAN */
+const char *const DWAVE_NAME[NDWAVE] = {"SAW", "WARM", "TRIANGLE", "HOLLOW", "SINE", "FM"};
+const char *const PSERIES_NAME[NPSERIES] = {"HARMONIC", "ODD", "OCTAVES", "FIFTHS", "BELL", "GLASS", "SUB"};
+const float PSERIES_R[NPSERIES][6] = {
+    {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},          /* the harmonics */
+    {1.0f, 3.0f, 5.0f, 7.0f, 9.0f, 11.0f},         /* the odd ones: hollow, a clarinet's */
+    {1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 0.5f},         /* octaves: an organ's, a sub-octave under */
+    {1.0f, 1.5f, 2.0f, 3.0f, 4.5f, 6.0f},          /* stacked fifths */
+    {1.0f, 2.76f, 5.40f, 8.93f, 13.34f, 18.64f},   /* a struck bell's (inharmonic) */
+    {1.0f, 2.32f, 4.25f, 6.63f, 9.38f, 12.5f},     /* glass, a bowl's */
+    {0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f}};         /* under the note: deep */
 const char *const SPRESET_NAME[NSPRESET] = {"GLASS", "CHIME", "ICE", "MUSIC BOX", "BOWL", "STAR", "KALIMBA", "VIBES"};
 const char *const MSOUND_NAME[NMSOUND] = {
     "E.PIANO", "RHODES BELL", "WURLI", "LOFI KEYS", "SOFT PIANO", "TOY PIANO", "ORGAN", "CLAV", "BELL", "VIBRAPHONE",
     "MARIMBA", "KALIMBA", "MUSIC BOX", "STEEL DRUM", "PLUCK", "HARP", "FLUTE", "OCARINA", "VOICE OOH", "SAW LEAD",
-    "SUPERSAW", "ACID", "SINE LEAD", "WARM PAD"};
-const char *const BMODEL_NAME[NBMODEL] = {"SINE", "TRIANGLE", "SQUARE", "SAW", "REESE", "SUB", "ORGAN", "FM"};
+    "SUPERSAW", "ACID", "SINE LEAD", "WARM PAD",
+    "CELESTA", "GLOCKENSPIEL", "HANDPAN", "KOTO", "GUZHENG", "SHAKUHACHI", "PAN FLUTE", "ERHU", "CHOIR AAH", "STRINGS",
+    "BRASS", "SYNTH BELL", "CRYSTAL", "CHIPTUNE", "HOLLOW LEAD", "DREAM KEYS", "WAVETABLE PAD", "WT SWEEP", "CUSTOM"};
+const char *const BMODEL_NAME[NBMODEL] = {"SINE", "TRIANGLE", "SQUARE", "SAW", "REESE", "SUB", "ORGAN", "FM",
+                                          "808", "ACID", "PLUCK", "DUB", "WOBBLE", "MOOG", "UPRIGHT", "SYNTH"};
 const char *const BMODE_NAME[NBMODE] = {"ROOT", "FIFTHS", "ARP UP", "ARP DOWN", "OCTAVES", "RANDOM"};
-const char *const KIT_NAME[NKIT] = {"SOFT", "LOFI", "808", "GLITCH"};
+const char *const KIT_NAME[NKIT] = {"SOFT", "LOFI", "808", "GLITCH", "TRAP", "BRUSH", "TECHNO", "TABLA"};
+const char *const UWAVE_NAME[NUWAVE] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "FM", "SUPERSAW", "ORGAN", "CLAV", "WAVETABLE"};
+const char *const UP2_NAME[NUP2] = {"OFF", "OCTAVE", "FIFTH UP", "2 OCTAVES", "BELL", "GLASS"};
 const char *const LSHAPE_NAME[NLSHAPE] = {"SINE", "TRIANGLE", "SAW UP", "SAW DOWN", "SQUARE", "RANDOM", "SMOOTH RND"};
 const char *const LTGT_NAME[NLTGT] = {"OFF", "FILTER", "RESONANCE", "DRONE TONE", "VIBRATO", "TREMOLO", "DRONE PAN",
                                       "CLOUD", "SHIMMER", "ECHO WARBLE", "BASS FILTER", "MELODY TONE", "PARTIALS",

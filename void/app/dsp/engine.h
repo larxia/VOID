@@ -46,7 +46,13 @@ enum {
     P_MORPH,
     P_DRAND, P_MRAND, P_DMEVOLVE,
     P_PTGT, P_PDEPTH,                      /* key pressure: what it moves, how far */
-    P_KEYPLAY,                             /* the keys play: the chords, the melody's sound, or both */          /* the UI's: a random drone, a random melody sound, drums that evolve */
+    P_KEYPLAY,                             /* the keys play: the chords, the melody's sound, or both */
+    P_DWAVE, P_PSERIES,                    /* the drone's voices' wave; its partials' tuning */
+    P_SCTRIG, P_SCREL, P_SCATK, P_SCWHAT,  /* the sidechain (PUMP's depth): what fires it, its release, attack, what ducks */
+    P_UFROM, P_UWAVE, P_UPOS, P_UMOD,      /* the CUSTOM melody sound: start from, wave, table position / FM ratio, amount */
+    P_UP2R, P_UP2L, P_UCUT, P_UFENV,       /*   a second partial (ratio, level); filter cutoff, its envelope */
+    P_URES, P_UATK, P_UDEC, P_USUS,        /*   resonance; the level's attack, decay, sustain */
+    P_UREL, P_UVIB, P_UBREATH, P_UDROP,    /*   release; vibrato, breath, a pitch drop at the front */          /* the UI's: a random drone, a random melody sound, drums that evolve */
     NP
 };
 #define NSTORED P_MCUR                   /* (not a range: every setting is kept; the cursors and actions are reset) */
@@ -125,23 +131,37 @@ uint32_t chord_build(int32_t root, int32_t d, const uint8_t *p, int8_t *out);
 int32_t key_snap(int32_t n, const uint8_t *p, int32_t *deg);
 
 /* ------------------------------------------------------------------- the tables the UI names --- */
-#define NDPRESET 12u
+#define NDPRESET 28u
+#define NDWAVE 6u
+#define NSCTRIG 7u
+#define NSCWHAT 6u
+#define NPSERIES 7u
 #define NSPRESET 8u
-#define NMSOUND 24u
-#define NBMODEL 8u
+#define NMSOUND 43u                      /* (the last: CUSTOM, made on the SOUND DESIGN pages) */
+#define MS_CUSTOM (NMSOUND - 1u)
+#define NUWAVE 9u
+#define NUP2 6u
+#define NBMODEL 16u
 #define NBMODE 6u
-#define NKIT 4u
+#define NKIT 8u
 #define NLSHAPE 7u
 #define NLTGT 15u
 #define NLRATE_FREE 64u                  /* LFO RATE: 0 .. 63 free (0.01 .. 20 Hz), then the synced divisions */
 #define NLDIV 10u
 extern const char *const DPRESET_NAME[NDPRESET];
-extern const uint8_t DPRESET_V[NDPRESET][10];  /* choir, partials, breath, timbre, tone, detune, attack, release, motion, cut */
+extern const uint8_t DPRESET_V[NDPRESET][12];  /* choir, partials, breath, timbre, tone, detune, attack, release, motion, cut,
+                                                * wave, series */
+extern const char *const DWAVE_NAME[NDWAVE];
+extern const char *const PSERIES_NAME[NPSERIES];
+extern const float PSERIES_R[NPSERIES][6];      /* each series' six partials, times the note */
 extern const char *const SPRESET_NAME[NSPRESET];
 extern const char *const MSOUND_NAME[NMSOUND];
 extern const char *const BMODEL_NAME[NBMODEL];
 extern const char *const BMODE_NAME[NBMODE];
 extern const char *const KIT_NAME[NKIT];
+extern const char *const UWAVE_NAME[NUWAVE];
+extern const char *const UP2_NAME[NUP2];
+void eng_custom_from(uint32_t sound, uint8_t *p);   /* a factory melody sound's settings into the CUSTOM ones */
 extern const char *const LSHAPE_NAME[NLSHAPE];
 extern const char *const LTGT_NAME[NLTGT];
 extern const char *const LDIV_NAME[NLDIV];

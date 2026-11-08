@@ -105,6 +105,8 @@ static inline float eng_lfo_hz(uint32_t rate, float bpm)
 }
 
 /* ------------------------------------------------------------------- modulation --- */
+static float sc_hit, sc_pg_last = 1.0f;
+static uint8_t sc_step;                  /* (the sequencer: a step the sidechain's rhythm fires on) */
 static float mod[NLTGT];                 /* each LFO TARGET's sum now, -1 .. 1 scaled by depth */
 static float lfo_ph[3], lfo_v[3], lfo_r[3][2];
 static float bpm_now = 90.0f;
@@ -190,6 +192,8 @@ RAM static void drones_chunk(void)
     float ka = 1.0f - fm_expf(-(float)CH * INV_FS * 3.0f / att), kr = 1.0f - fm_expf(-(float)CH * INV_FS * 3.0f / rel);
     float vib = mod[4] * 60.0f, motion = u7(P_DMOTION), pmix = clampf(part * (1.0f + mod[12]), 0.0f, 1.5f);
     float pa[NPART], ps = 0.0f, stretch = timbre * timbre * 0.045f;
+    uint32_t wave = F.p[P_DWAVE] % NDWAVE, series = F.p[P_PSERIES] % NPSERIES;
+    float fmi = 0.04f + 0.3f * timbre;  /* (FM: the modulator's depth, in turns, by TIMBRE) */
     for (k = 0; k < NPART; k++) {        /* TIMBRE: dark (the fundamental) .. bright and bell-like */
         pa[k] = fm_powf(1.0f / (float)(k + 1u), 2.4f - 2.1f * timbre);
         ps += pa[k];
@@ -223,7 +227,7 @@ RAM static void drones_chunk(void)
         f = mtof((float)v->note + vib * 0.01f);
         v->f = f;
         for (k = 0; k < NPART; k++) {    /* each partial's step this chunk, its wander */
-            float fk = f * (float)(k + 1u) * (1.0f + stretch * (float)(k * k)), w;
+            float fk = f * PSERIES_R[series][k] * (1.0f + stretch * (float)(k * k)), w;
             if (fk > 10000.0f) {
                 cr[k] = 1.0f;
                 ci[k] = 0.0f;
@@ -257,9 +261,17 @@ RAM static void drones_chunk(void)
                 e0 += de;
                 if (choir > 0.001f) {
                     for (k = 0; k < 3u; k++) {
-                        v->sph[k] += dt[k];
-                        v->sph[k] -= v->sph[k] >= 1.0f ? 1.0f : 0.0f;
-                        c += saw(v->sph[k], dt[k]);
+                        float t = v->sph[k] += dt[k];
+                        if (t >= 1.0f)
+                            t = v->sph[k] -= 1.0f;
+                        switch (wave) {      /* the voices' wave: buzzy .. round */
+                        case 0: c += saw(t, dt[k]); break;
+                        case 1: c += 0.55f * saw(t, dt[k]) + 0.9f * (1.0f - 4.0f * fm_fabsf(t - 0.5f)); break;
+                        case 2: c += 1.3f * (1.0f - 4.0f * fm_fabsf(t - 0.5f)); break;
+                        case 3: c += 0.8f * square(t, dt[k]); break;
+                        case 4: c += 1.4f * fm_sin_turns(t); break;
+                        default: c += 1.2f * fm_sin_turns(t + fmi * fm_sin_turns(2.0f * t)); break;
+                        }
                     }
                     s += svf(&v->tone, c * 0.33f, 0) * choir;
                 }
@@ -292,14 +304,15 @@ RAM static void drones_chunk(void)
 
 /* ------------------------------------------------------------------- melody --- */
 typedef struct {
-    uint8_t osc;                         /* 0 sine, 1 triangle, 2 saw, 3 square, 4 FM, 5 supersaw, 6 organ, 7 clav */
+    uint8_t osc;                         /* 0 sine, 1 triangle, 2 saw, 3 square, 4 FM, 5 supersaw, 6 organ, 7 clav,
+                                          * 8 wavetable (fmr: its place 0..4, fmi: how far it sweeps as fenv falls) */
     float fmr, fmi, fmi_end, fmd;        /* FM: ratio, index from .. to, over seconds */
     float r2, l2, d2;                    /* a second partial: ratio, level, fall (bells, toys) */
     float cut, fenv, fdec, q;            /* filter: cutoff (times the note), its envelope (times), fall, Q; cut 0: none */
     float a, d, s, r;                    /* the level: attack, decay, sustain (0..1), release */
     float vib, trem, breath, drop, gain;
 } msound_t;
-static const msound_t MS[NMSOUND] = {
+static const msound_t MS[NMSOUND - 1u] = {   /* (and CUSTOM, made from its settings: ms_custom) */
     /* E.PIANO */ {4, 1.0f, 1.6f, 0.08f, 0.9f, 14.0f, 0.05f, 0.08f, 0, 0, 0, 0.7f, 0.004f, 1.2f, 0.25f, 1.0f, 0, 0, 0, 0, 0.9f},
     /* RHODES BELL */ {4, 1.0f, 2.2f, 0.12f, 0.7f, 2.01f, 0.25f, 0.6f, 0, 0, 0, 0.7f, 0.003f, 1.6f, 0.3f, 1.2f, 0, 0, 0, 0, 0.9f},
     /* WURLI */ {4, 1.0f, 3.2f, 0.5f, 0.45f, 0, 0, 0, 6.0f, 0, 0, 0.7f, 0.003f, 0.9f, 0.4f, 0.6f, 0, 0.2f, 0, 0, 0.8f},
@@ -324,7 +337,104 @@ static const msound_t MS[NMSOUND] = {
     /* ACID */ {2, 0, 0, 0, 0, 0, 0, 0, 1.5f, 12.0f, 0.18f, 8.0f, 0.003f, 0.25f, 0.4f, 0.08f, 0, 0, 0, 0, 0.6f},
     /* SINE LEAD */ {0, 0, 0, 0, 0, 2.0f, 0.06f, 9.0f, 0, 0, 0, 0.7f, 0.02f, 0.2f, 0.9f, 0.2f, 0.18f, 0, 0, 0, 1.0f},
     /* WARM PAD */ {5, 0, 0, 0, 0, 0.5f, 0.3f, 9.0f, 1.5f, 1.0f, 1.5f, 0.7f, 0.5f, 0.6f, 0.9f, 1.5f, 0.05f, 0, 0, 0, 0.6f},
+    /* CELESTA */ {0, 0, 0, 0, 0, 4.0f, 0.35f, 0.3f, 0, 0, 0, 0.7f, 0.002f, 1.4f, 0.0f, 1.0f, 0, 0, 0, 0, 1.0f},
+    /* GLOCKENSPIEL */ {0, 0, 0, 0, 0, 2.76f, 0.5f, 0.4f, 0, 0, 0, 0.7f, 0.001f, 1.8f, 0.0f, 1.4f, 0, 0, 0, 0, 0.9f},
+    /* HANDPAN */ {0, 0, 0, 0, 0, 2.0f, 0.4f, 0.5f, 0, 0, 0, 0.7f, 0.003f, 1.6f, 0.0f, 1.3f, 0, 0, 0, 0.4f, 1.0f},
+    /* KOTO */ {2, 0, 0, 0, 0, 0, 0, 0, 3.0f, 6.0f, 0.15f, 0.9f, 0.002f, 0.9f, 0.0f, 0.5f, 0.12f, 0, 0, 0.6f, 0.8f},
+    /* GUZHENG */ {1, 0, 0, 0, 0, 0, 0, 0, 4.0f, 4.0f, 0.3f, 0.8f, 0.002f, 1.3f, 0.0f, 0.8f, 0.25f, 0, 0, 0.3f, 1.0f},
+    /* SHAKUHACHI */ {0, 0, 0, 0, 0, 2.0f, 0.15f, 9.0f, 0, 0, 0, 0.7f, 0.09f, 0.3f, 0.85f, 0.3f, 0.22f, 0, 0.12f, 0, 0.9f},
+    /* PAN FLUTE */ {1, 0, 0, 0, 0, 0, 0, 0, 3.0f, 0, 1.0f, 0.7f, 0.05f, 0.2f, 0.9f, 0.25f, 0.1f, 0, 0.08f, 0, 0.9f},
+    /* ERHU */ {2, 0, 0, 0, 0, 0, 0, 0, 2.5f, 0, 1.0f, 1.2f, 0.12f, 0.3f, 0.9f, 0.3f, 0.35f, 0, 0, 0, 0.55f},
+    /* CHOIR AAH */ {5, 0, 0, 0, 0, 0, 0, 0, 2.0f, 0.5f, 1.0f, 2.5f, 0.25f, 0.4f, 0.9f, 0.6f, 0.1f, 0, 0.03f, 0, 0.5f},
+    /* STRINGS */ {5, 0, 0, 0, 0, 0, 0, 0, 3.5f, 0, 1.0f, 0.8f, 0.3f, 0.5f, 0.9f, 0.7f, 0.08f, 0, 0, 0, 0.5f},
+    /* BRASS */ {2, 0, 0, 0, 0, 0, 0, 0, 1.5f, 5.0f, 0.25f, 1.0f, 0.04f, 0.3f, 0.8f, 0.2f, 0.05f, 0, 0, 0, 0.55f},
+    /* SYNTH BELL */ {4, 3.5f, 2.0f, 0.2f, 0.6f, 0, 0, 0, 0, 0, 0, 0.7f, 0.002f, 2.0f, 0.0f, 1.5f, 0, 0, 0, 0, 0.8f},
+    /* CRYSTAL */ {4, 7.0f, 1.2f, 0.05f, 0.3f, 2.0f, 0.3f, 0.6f, 0, 0, 0, 0.7f, 0.002f, 2.2f, 0.0f, 1.8f, 0, 0, 0, 0, 0.8f},
+    /* CHIPTUNE */ {3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.7f, 0.001f, 0.2f, 0.7f, 0.05f, 0.12f, 0, 0, 0, 0.5f},
+    /* HOLLOW LEAD */ {3, 0, 0, 0, 0, 0, 0, 0, 3.0f, 1.0f, 0.3f, 1.0f, 0.01f, 0.3f, 0.8f, 0.2f, 0.15f, 0, 0, 0, 0.6f},
+    /* DREAM KEYS */ {4, 1.0f, 1.0f, 0.3f, 0.8f, 0, 0, 0, 0, 0, 0, 0.7f, 0.02f, 1.8f, 0.3f, 1.2f, 0, 0.2f, 0, 0, 0.8f},
+    /* WAVETABLE PAD */ {8, 0.5f, 1.5f, 0, 0, 0, 0, 0, 6.0f, 0, 2.0f, 0.7f, 0.3f, 1.0f, 0.8f, 1.0f, 0.05f, 0, 0, 0, 0.6f},
+    /* WT SWEEP */ {8, 3.8f, -3.5f, 0, 0, 0, 0, 0, 0, 0, 0.6f, 0.7f, 0.005f, 1.2f, 0.5f, 0.6f, 0, 0, 0, 0, 0.55f},
 };
+/* CUSTOM: the SOUND DESIGN pages' settings as a sound (made again each chunk: a turn is heard at once) */
+static msound_t ms_custom;
+static const float U_RATIO[11] = {0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 3.5f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};
+static const float U_P2[NUP2] = {0.0f, 2.0f, 3.0f, 4.0f, 2.76f, 5.4f};
+static const float U_GAIN[NUWAVE] = {1.0f, 1.0f, 0.6f, 0.7f, 0.9f, 0.55f, 0.6f, 0.8f, 0.7f};
+RAM static void custom_build(void)
+{
+    msound_t *c = &ms_custom;
+    float pos = u7(P_UPOS), amt = u7(P_UMOD), x;
+    c->osc = (uint8_t)(F.p[P_UWAVE] % NUWAVE);
+    if (c->osc == 8u) {                  /* WAVETABLE: where in the table, and how far it sweeps (either way) */
+        c->fmr = pos * 4.0f;
+        c->fmi = (amt - 0.5f) * 8.0f;
+    } else {                             /* FM: the ratio, the amount (it falls to a third) */
+        c->fmr = U_RATIO[(uint32_t)(pos * 10.0f + 0.5f)];
+        c->fmi = amt * 4.0f;
+    }
+    c->fmi_end = c->fmi * 0.3f;
+    c->fmd = 0.6f;
+    c->r2 = U_P2[F.p[P_UP2R] % NUP2];
+    c->l2 = c->r2 > 0.0f ? u7(P_UP2L) * 0.8f : 0.0f;
+    c->d2 = 1.5f;
+    x = u7(P_UCUT);
+    c->cut = x > 0.99f ? 0.0f : 0.5f * fm_powf(40.0f, x);
+    c->fenv = u7(P_UFENV) * 8.0f;
+    x = u7(P_URES);
+    c->q = 0.5f + 8.0f * x * x;
+    x = u7(P_UATK);
+    c->a = 0.001f + 2.0f * x * x;
+    x = u7(P_UDEC);
+    c->d = 0.05f + 3.0f * x * x;
+    c->fdec = c->d;
+    c->s = u7(P_USUS);
+    x = u7(P_UREL);
+    c->r = 0.02f + 3.0f * x * x;
+    c->vib = u7(P_UVIB) * 0.4f;
+    c->trem = 0.0f;
+    c->breath = u7(P_UBREATH) * 0.25f;
+    c->drop = u7(P_UDROP) * 12.0f;
+    c->gain = U_GAIN[c->osc];
+}
+/* (the main loop's) a factory sound's settings into CUSTOM's, as near as they go */
+static uint8_t u127(float x) { x = x < 0.0f ? 0.0f : x > 1.0f ? 1.0f : x; return (uint8_t)(x * 127.0f + 0.5f); }
+static float usqrt(float x) { return x <= 0.0f ? 0.0f : fm_sqrtf(x); }
+void eng_custom_from(uint32_t sound, uint8_t *p)
+{
+    const msound_t *s = &MS[sound % (NMSOUND - 1u)];
+    uint32_t i, best = 0;
+    p[P_UWAVE] = s->osc;
+    if (s->osc == 8u) {
+        p[P_UPOS] = u127(s->fmr / 4.0f);
+        p[P_UMOD] = u127(s->fmi / 8.0f + 0.5f);
+    } else {
+        for (i = 1; i < 11u; i++)
+            if (fm_fabsf(U_RATIO[i] - s->fmr) < fm_fabsf(U_RATIO[best] - s->fmr))
+                best = i;
+        p[P_UPOS] = u127((float)best / 10.0f);
+        p[P_UMOD] = u127(s->fmi / 4.0f);
+    }
+    best = 0;
+    if (s->l2 > 0.0f)
+        for (i = 1, best = 1; i < NUP2; i++)
+            if (fm_fabsf(U_P2[i] - s->r2) < fm_fabsf(U_P2[best] - s->r2))
+                best = i;
+    p[P_UP2R] = (uint8_t)best;
+    p[P_UP2L] = u127(s->l2 / 0.8f);
+    p[P_UCUT] = s->cut <= 0.0f ? 127u : u127(fm_log2f(s->cut / 0.5f) / fm_log2f(40.0f));
+    if (p[P_UCUT] == 127u && s->cut > 0.0f)
+        p[P_UCUT] = 126u;
+    p[P_UFENV] = u127(s->fenv / 8.0f);
+    p[P_URES] = u127(usqrt((s->q - 0.5f) / 8.0f));
+    p[P_UATK] = u127(usqrt((s->a - 0.001f) / 2.0f));
+    p[P_UDEC] = u127(usqrt((s->d - 0.05f) / 3.0f));
+    p[P_USUS] = u127(s->s);
+    p[P_UREL] = u127(usqrt((s->r - 0.02f) / 3.0f));
+    p[P_UVIB] = u127(s->vib / 0.4f);
+    p[P_UBREATH] = u127(s->breath / 0.25f);
+    p[P_UDROP] = u127(s->drop / 12.0f);
+}
 #define NMV 4u                          /* (the sequence's notes and the ones played live) */
 typedef struct {
     int16_t note;
@@ -341,6 +451,30 @@ static uint32_t mv_next;
 static float mel_last_f;
 static float ml[CH], mr[CH];
 
+static inline float fm_cos_turns_b(float t) { return fm_sin_turns(t + 0.25f); }
+
+/* the wavetable: five shapes in a row (sine, triangle, saw, square, a thin pulse), between two of them */
+static inline float wt_shape(uint32_t k, float ph, float dt)
+{
+    switch (k) {
+    case 0: return fm_sin_turns(ph);
+    case 1: return 1.0f - 4.0f * fm_fabsf(ph - 0.5f);
+    case 2: return saw(ph, dt);
+    case 3: return square(ph, dt) * 0.8f;
+    default: {                           /* a 25 % pulse, its offset taken out */
+        float u = ph + 0.75f;
+        u -= u >= 1.0f ? 1.0f : 0.0f;
+        return 0.7f * ((ph < 0.25f ? 1.0f : -1.0f) + blep(ph, dt) - blep(u, dt) + 0.5f);
+    }
+    }
+}
+static inline float wt_at(float pos, float ph, float dt)
+{
+    uint32_t k = (uint32_t)pos;
+    float fr = pos - (float)k;
+    return wt_shape(k, ph, dt) + (wt_shape(k + 1u, ph, dt) - wt_shape(k, ph, dt)) * fr;
+}
+
 RAM static void mel_on(int note, float vel, int live)
 {
     mvoice_t *v = 0;
@@ -352,7 +486,8 @@ RAM static void mel_on(int note, float vel, int live)
         v = &mv[mv_next % NMV];
     mv_next++;
     v->live = (uint8_t)live;
-    const msound_t *s = &MS[F.p[P_MSOUND] % NMSOUND];
+    uint32_t sn = F.p[P_MSOUND] % NMSOUND;
+    const msound_t *s = sn == MS_CUSTOM ? &ms_custom : &MS[sn];
     float f = mtof((float)note), gl = u7(P_MGLIDE);
     v->s = s;
     v->note = (int16_t)note;
@@ -384,10 +519,11 @@ RAM static void mel_chunk(void)
     float tone = clampf(u7(P_MTONE) + 0.5f * mod[11], 0.0f, 1.0f), tk = 0.3f + 1.7f * tone;
     for (i = 0; i < CH; i++)
         ml[i] = mr[i] = 0.0f;
+    custom_build();
     for (j = 0; j < NMV; j++) {
         mvoice_t *v = &mv[j];
         const msound_t *s = v->s;
-        float e0 = v->env, e1, de, f, dt, ct = (float)CH * INV_FS, vib, fi = 0.0f, l2;
+        float e0 = v->env, e1, de, f, dt, ct = (float)CH * INV_FS, vib, fi = 0.0f, l2, wpos = 0.0f;
         if (v->note < 0 || !s)
             continue;
         if (v->gate) {                   /* attack, decay to sustain */
@@ -420,6 +556,8 @@ RAM static void mel_chunk(void)
             fi = (s->fmi_end + (s->fmi - s->fmi_end) * k1) * tk;
         }
         l2 = s->l2 * fm_expf(-v->t / (s->d2 + 0.001f)) * tk;
+        if (s->osc == 8u)                /* the wavetable's place: from fmr, swept by fmi as the envelope falls */
+            wpos = clampf(s->fmr + s->fmi * (1.0f - v->fenv), 0.0f, 3.999f);
         {
             float tr = 1.0f - s->trem * (0.5f + 0.5f * fm_sin_turns(wrap(v->t * 5.5f)));
             float g = s->gain * 0.32f * v->vel * tr;
@@ -455,6 +593,7 @@ RAM static void mel_chunk(void)
                     break;
                 }
                 case 7: o = square(v->ph[0], dt) * 0.5f + saw(v->ph[0], dt) * 0.3f; break;
+                default: o = wt_at(wpos, v->ph[0], dt); break;
                 }
                 if (l2 > 0.0005f) {
                     v->p2 = wrap(v->p2 + dt * s->r2);
@@ -508,11 +647,33 @@ RAM static void bass_chunk(void)
         bs.note = -1;
         return;
     }
+    if (model == 14)                     /* UPRIGHT: a plucked string, it fades even held */
+        e1 *= fm_expf(-bs.t * 2.5f);
     de = (e1 - bs.env) * (1.0f / (float)CH);
-    dt = bs.fg * INV_FS;
+    dt = bs.fg * INV_FS * (model == 8 ? 1.0f + 0.6f * fm_expf(-bs.t * 22.0f) : 1.0f);   /* 808: the pitch falls in */
     {
-        float tone = clampf(u7(P_BTONE) + 0.5f * mod[10], 0.0f, 1.0f);
-        svf_set(&bs.flt, 120.0f + 3600.0f * tone * tone * (1.0f + 1.5f * fm_expf(-bs.t * 12.0f)), 1.2f);
+        float tone = clampf(u7(P_BTONE) + 0.5f * mod[10], 0.0f, 1.0f), cut, q = 1.2f;
+        switch (model) {                 /* each model's filter */
+        case 9:                          /* ACID: resonant, its envelope snapping shut */
+            cut = 140.0f + 4200.0f * tone * tone * fm_expf(-bs.t * 9.0f) + 200.0f * tone;
+            q = 6.0f;
+            break;
+        case 10:                         /* PLUCK: bright at the front, closing fast */
+            cut = 180.0f + 3200.0f * (0.3f + tone) * fm_expf(-bs.t * 20.0f);
+            break;
+        case 12:                         /* WOBBLE: the filter swung in eighths */
+            cut = 150.0f + 2600.0f * tone * (0.5f - 0.5f * fm_cos_turns_b(bs.t * bpm_now / 30.0f));
+            q = 3.0f;
+            break;
+        case 13:                         /* MOOG: a fat low-pass, a little resonance, a soft fall */
+            cut = 200.0f + 2400.0f * tone * tone * (0.4f + 0.6f * fm_expf(-bs.t * 5.0f));
+            q = 2.0f;
+            break;
+        default:
+            cut = 120.0f + 3600.0f * tone * tone * (1.0f + 1.5f * fm_expf(-bs.t * 12.0f));
+            break;
+        }
+        svf_set(&bs.flt, cut, q);
     }
     g = 0.5f;
     for (i = 0; i < CH; i++) {
@@ -534,9 +695,23 @@ RAM static void bass_chunk(void)
             o = fm_sin_turns(bs.ph[2]) + 0.3f * (4.0f * fm_fabsf(bs.ph[0] - 0.5f) - 1.0f);
             break;
         case 6: o = 0.6f * fm_sin_turns(bs.ph[0]) + 0.3f * fm_sin_turns(wrap(2.0f * bs.ph[0])) + 0.15f * fm_sin_turns(wrap(3.0f * bs.ph[0])); break;
-        default:
+        case 7:
             bs.mph = wrap(bs.mph + dt * 2.0f);
             o = fm_sin_turns(wrap(bs.ph[0] + 0.35f * fm_expf(-bs.t * 6.0f) * fm_sin_turns(bs.mph) + 4.0f));
+            break;
+        case 8: o = fm_tanhf(1.8f * fm_sin_turns(bs.ph[0])) * 0.9f; break;          /* 808: a sine, driven */
+        case 9: o = saw(bs.ph[0], dt) * 0.7f; break;                                  /* ACID */
+        case 10: o = 0.5f * saw(bs.ph[0], dt) + 0.5f * (4.0f * fm_fabsf(bs.ph[0] - 0.5f) - 1.0f); break;   /* PLUCK */
+        case 11: o = fm_sin_turns(bs.ph[0]) + 0.25f * fm_sin_turns(wrap(2.0f * bs.ph[0])); break;          /* DUB */
+        case 12: o = 0.5f * saw(bs.ph[0], dt) + 0.4f * square(bs.ph[0], dt); break;                          /* WOBBLE */
+        case 13:                                                                       /* MOOG: two, a hair apart */
+            bs.ph[1] = wrap(bs.ph[1] + dt * 1.004f);
+            o = fm_tanhf(1.4f * (0.5f * saw(bs.ph[0], dt) + 0.4f * square(bs.ph[1], dt * 1.004f)));
+            break;
+        case 14: o = 0.8f * fm_sin_turns(bs.ph[0]) + 0.25f * (4.0f * fm_fabsf(bs.ph[0] - 0.5f) - 1.0f); break;   /* UPRIGHT */
+        default:                                                                       /* SYNTH: a square, a sub under */
+            bs.ph[2] = wrap(bs.ph[2] + dt * 0.5f);
+            o = 0.45f * square(bs.ph[0], dt) + 0.6f * fm_sin_turns(bs.ph[2]);
             break;
         }
         o = svf(&bs.flt, o, 0);
@@ -820,6 +995,13 @@ RAM static void seq_step(int32_t abs_step)
     int fill = F.fill && s >= 8u;
     V.step = (int8_t)s;
     V.bar = bar;
+    switch (F.p[P_SCTRIG] % NSCTRIG) {   /* the sidechain's rhythm: beats it fires on, drums or not */
+    case 1: sc_step |= (s % 4u) == 0u; break;                  /* every beat */
+    case 2: sc_step |= (s % 2u) == 0u; break;                  /* the eighths */
+    case 3: sc_step |= (s % 4u) == 2u; break;                  /* the off-beats */
+    case 6: sc_step |= s == 0u || s == 6u || s == 12u; break;  /* 3-3-2 (a dotted feel) */
+    default: break;
+    }
     /* drums */
     if (F.p[P_DMPLAYS]) {
         for (t = 0; t < NDRUM; t++) {
@@ -1072,9 +1254,25 @@ RAM void eng_render(int32_t *lr, uint32_t n, float gain)
         trem = 1.0f - 0.5f * (0.5f + 0.5f * mod[5]) * (mod[5] != 0.0f);
         trem *= clampf(1.0f + mod[14], 0.0f, 2.0f);   /* DRONE LEVEL (pressure: louder as you press) */
         pan = clampf(mod[6], -1.0f, 1.0f);
-        pump_env *= fm_expf(-(float)CH * INV_FS * 8.0f);
-        if (drums_kicked())
-            pump_env = pump;
+        {                                /* the sidechain: fired, ducked (ATTACK in), let back (RELEASE) */
+            uint32_t trig = F.p[P_SCTRIG] % NSCTRIG;
+            int kick = drums_kicked(), snare = drums_snared(), fire;
+            float rel = 0.03f * fm_powf(50.0f, u7(P_SCREL)), atk = u7(P_SCATK);
+            fire = trig == 0u ? kick : trig == 4u ? snare : trig == 5u ? (kick || snare) : sc_step;
+            sc_step = 0;
+            if (fire && pump > 0.0f)
+                sc_hit = pump;
+            if (sc_hit > 0.0f) {
+                if (atk < 0.01f)
+                    pump_env = sc_hit;
+                else
+                    pump_env += (sc_hit - pump_env) * (1.0f - fm_expf(-(float)CH * INV_FS / (0.002f + 0.06f * atk * atk)));
+                if (pump_env >= sc_hit * 0.97f)
+                    sc_hit = 0.0f;       /* (in: now the release) */
+            } else {
+                pump_env *= fm_expf(-(float)CH * INV_FS / rel);
+            }
+        }
         pg = 1.0f - 0.8f * pump_env;
         for (i = 0; i < DH; i++) {       /* the drones at their half rate: drive, filter, pan; then up to the full */
             float l = hl[i] * sw * trem, r = hr[i] * sw * trem;
@@ -1119,10 +1317,17 @@ RAM void eng_render(int32_t *lr, uint32_t n, float gain)
             gn = 0.9f / fm_tanhf(gs);
             tape_ph = wrap(tape_ph + 0.33f * (float)CH * INV_FS);
             tape_ph2 = wrap(tape_ph2 + 5.1f * (float)CH * INV_FS);
+            static const uint8_t DUCKS[NSCWHAT] = {   /* what the sidechain ducks: drones, melody, bass, shards, cloud+echo */
+                0x1Bu, 0x1Fu, 0x01u, 0x11u, 0x06u, 0x10u};
+            uint32_t dk = DUCKS[F.p[P_SCWHAT] % NSCWHAT];
+            float pg0 = sc_pg_last, dpg = (pg - sc_pg_last) / (float)m;   /* (the duck glides across the chunk) */
+            sc_pg_last = pg;
             for (i = 0; i < m; i++) {
-                float l, r, mid, side, pl, pr;
-                l = dl[i] * pg + ml[i] * mx_m * pg + bsl[i] * mx_b + shl[i] * mx_s * pg + (cwl[i] * mx_c * 1.4f + ewl[i]) * pg + dbuf_l[i];
-                r = dr[i] * pg + mr[i] * mx_m * pg + bsl[i] * mx_b + shr[i] * mx_s * pg + (cwr[i] * mx_c * 1.4f + ewr[i]) * pg + dbuf_r[i];
+                float l, r, mid, side, pl, pr, g = pg0 + dpg * (float)(i + 1u);
+                float gd = dk & 1u ? g : 1.0f, gm = dk & 2u ? g : 1.0f, gb = dk & 4u ? g : 1.0f;
+                float gsh = dk & 8u ? g : 1.0f, gc = dk & 16u ? g : 1.0f;
+                l = dl[i] * gd + ml[i] * mx_m * gm + bsl[i] * mx_b * gb + shl[i] * mx_s * gsh + (cwl[i] * mx_c * 1.4f + ewl[i]) * gc + dbuf_l[i];
+                r = dr[i] * gd + mr[i] * mx_m * gm + bsl[i] * mx_b * gb + shr[i] * mx_s * gsh + (cwr[i] * mx_c * 1.4f + ewr[i]) * gc + dbuf_r[i];
                 if (sink > 0.002f) {     /* SINK: everything under (one-pole x2, gliding in) */
                     sink_l1 += (l - sink_l1) * k1;
                     sink_l2 += (sink_l1 - sink_l2) * k1;
@@ -1167,7 +1372,7 @@ RAM void eng_render(int32_t *lr, uint32_t n, float gain)
                 r -= dc_r;
                 {                        /* the limiter: everything at once turned down smoothly, never crunched */
                     float pk = fm_maxf(fm_fabsf(l), fm_fabsf(r)), g;
-                    lim_env = pk > lim_env ? lim_env + (pk - lim_env) * 0.3f : lim_env * 0.99985f;
+                    lim_env = pk > lim_env ? lim_env + (pk - lim_env) * 0.3f : lim_env * 0.99998f;   /* (slow back: it does not undo PUMP) */
                     g = lim_env > 0.5f ? 0.5f / lim_env : 1.0f;
                     l *= g;
                     r *= g;
