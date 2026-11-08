@@ -325,7 +325,12 @@ static void value_txt(uint32_t p, char *b)
             } else {
                 itxt((int32_t)(hz * 10.0f + 0.5f) / 10, b);
                 tcat(b, ".");
-                itxt((int32_t)(hz * 10.0f + 0.5f) % 10, b + strlen(b));
+                {
+                    char *e = b;
+                    while (*e)
+                        e++;
+                    itxt((int32_t)(hz * 10.0f + 0.5f) % 10, e);
+                }
                 tcat(b, "HZ");
             }
         } else {
