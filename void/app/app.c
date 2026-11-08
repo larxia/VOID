@@ -6,10 +6,12 @@
  * on K1 .. K4. PLAY runs the sequencers, REC freezes the cloud (on a step page: a rest), SAVE keeps scenes.
  * Part of the unity build (device/unity.c, host/plat_host.c), after the platform: gfx.c and announce.c are in scope. */
 #include "engine.h"
+#include "logo.h"
 
 /* ------------------------------------------------------------------- the settings' faces --- */
 enum { FM_PCT, FM_NUM, FM_NAMES, FM_NOTE, FM_ONOFF, FM_BPM, FM_BIPOLAR, FM_SEMI, FM_LRATE, FM_OCT, FM_STEP, FM_MNOTE,
-       FM_BNOTE, FM_CDEG, FM_TURN2, FM_MORPH, FM_CH, FM_SHIFT, FM_ECHO, FM_PLUS1, FM_DICE };
+       FM_BNOTE, FM_CDEG, FM_TURN2, FM_MORPH, FM_CH, FM_SHIFT, FM_ECHO, FM_PLUS1, FM_DICE, FM_SCTIME, FM_SCATK, FM_UPOS, FM_UMOD, FM_UCUT,
+       FM_UTIME };
 typedef struct {
     const char *name;
     uint8_t max, def, fmt;
@@ -27,6 +29,9 @@ static const char *const MOCT_N[4] = {"-1", "0", "+1", "+2"};
 static const char *const BOCT_N[3] = {"-1", "0", "+1"};
 static const char *const SOCT_N[3] = {"LOW", "MID", "HIGH"};
 static const char *const KEYPLAY_N[3] = {"CHORDS", "MELODY", "BOTH"};
+static const char *const SCTRIG_N[NSCTRIG] = {"KICK", "EVERY BEAT", "EIGHTHS", "OFF-BEATS", "SNARE", "KICK+SNARE", "3-3-2"};
+static const char *const SCWHAT_N[NSCWHAT] = {"PADS + FX", "ALL BUT DRUMS", "DRONES", "DRONES + CLOUD", "MELODY + BASS",
+                                              "CLOUD + ECHO"};
 
 static const pd_t PD[NP] = {
     [P_ROOT] = {"ROOT", 11, 9, FM_NAMES, NOTE_N},
@@ -135,11 +140,33 @@ static const pd_t PD[NP] = {
     [P_PTGT] = {"PRESSURE", NLTGT - 1, 14, FM_NAMES, LTGT_NAME},
     [P_PDEPTH] = {"PRESS DEPTH", 127, 110, FM_BIPOLAR, 0},
     [P_KEYPLAY] = {"KEYS PLAY", 2, 0, FM_NAMES, KEYPLAY_N},
+    [P_DWAVE] = {"WAVE", NDWAVE - 1, 0, FM_NAMES, DWAVE_NAME},
+    [P_PSERIES] = {"PARTIALS TUNE", NPSERIES - 1, 0, FM_NAMES, PSERIES_NAME},
+    [P_SCTRIG] = {"TRIGGER", NSCTRIG - 1, 0, FM_NAMES, SCTRIG_N},
+    [P_SCREL] = {"RELEASE", 127, 46, FM_SCTIME, 0},
+    [P_SCATK] = {"ATTACK", 127, 0, FM_SCATK, 0},
+    [P_SCWHAT] = {"DUCKS", NSCWHAT - 1, 0, FM_NAMES, SCWHAT_N},
+    [P_UFROM] = {"START FROM", NMSOUND - 2, 0, FM_NAMES, MSOUND_NAME},
+    [P_UWAVE] = {"WAVE", NUWAVE - 1, 4, FM_NAMES, UWAVE_NAME},
+    [P_UPOS] = {"TABLE / RATIO", 127, 13, FM_UPOS, 0},
+    [P_UMOD] = {"AMOUNT", 127, 51, FM_UMOD, 0},
+    [P_UP2R] = {"PARTIAL 2", NUP2 - 1, 0, FM_NAMES, UP2_NAME},
+    [P_UP2L] = {"PARTIAL LEVEL", 127, 0, FM_PCT, 0},
+    [P_UCUT] = {"CUTOFF", 127, 127, FM_UCUT, 0},
+    [P_UFENV] = {"FILTER ENV", 127, 0, FM_PCT, 0},
+    [P_URES] = {"RESONANCE", 127, 0, FM_PCT, 0},
+    [P_UATK] = {"ATTACK", 127, 6, FM_UTIME, 0},
+    [P_UDEC] = {"DECAY", 127, 76, FM_UTIME, 0},
+    [P_USUS] = {"SUSTAIN", 127, 32, FM_PCT, 0},
+    [P_UREL] = {"RELEASE", 127, 72, FM_UTIME, 0},
+    [P_UVIB] = {"VIBRATO", 127, 0, FM_PCT, 0},
+    [P_UBREATH] = {"BREATH", 127, 0, FM_PCT, 0},
+    [P_UDROP] = {"PITCH DROP", 127, 0, FM_PCT, 0},
 };
 static const uint16_t MORPH_MS[9] = {0, 500, 1000, 2000, 4000, 8000, 15000, 30000, 60000};
 
 /* ------------------------------------------------------------------- the pages --- */
-enum { V_RIVER, V_DRUMS, V_MEL, V_BASS, V_CSEQ, V_FILTER, V_LFO, V_MIXER, V_SCENES };
+enum { V_RIVER, V_DRUMS, V_MEL, V_BASS, V_CSEQ, V_FILTER, V_LFO, V_MIXER, V_SCENES, V_DUCK };
 enum { K_DRONE, K_DRUMS, K_MEL, K_BASS, K_CSEQ, K_SCENES, K_LIVE };   /* (K_LIVE: the melody played freely) */   /* what the keys do on the page */
 typedef struct {
     const char *name;
@@ -151,6 +178,7 @@ static const page_t PAGES[] = {
     {"PLAY", B_HOME, V_RIVER, K_DRONE, {P_KEYPLAY, P_CHORD, P_HOLD, P_LATCH}},
     {"SOUND", B_HOME, V_RIVER, K_DRONE, {P_ATTACK, P_RELEASE, P_DETUNE, P_FCUT}},
     {"SOUND II", B_HOME, V_RIVER, K_DRONE, {P_DPRESET, P_VOICING, P_HARM, P_DRAND}},
+    {"DRONE TYPE", B_HOME, V_RIVER, K_DRONE, {P_DPRESET, P_DWAVE, P_PSERIES, P_TONE}},
     {"SPACE", B_HOME, V_RIVER, K_DRONE, {P_CAMT, P_SHIM, P_EAMT, P_FREEZE}},
     {"KEY & TOUCH", B_HOME, V_RIVER, K_DRONE, {P_ROOT, P_SCALE, P_PTGT, P_PDEPTH}},
     {"MIXER", B_HOME, V_MIXER, K_DRONE, {P_MXDRONE, P_MXMEL, P_MXBASS, P_MXDRUM}},
@@ -161,6 +189,7 @@ static const page_t PAGES[] = {
     {"DRONE", B_EDIT, V_RIVER, K_DRONE, {P_DPRESET, P_CHOIR, P_PARTIALS, P_BREATH}},
     {"DRONE II", B_EDIT, V_RIVER, K_DRONE, {P_TIMBRE, P_TONE, P_DETUNE, P_DMOTION}},
     {"DRONE III", B_EDIT, V_RIVER, K_DRONE, {P_ATTACK, P_RELEASE, P_SPREAD_OCT, P_DRAND}},
+    {"DRONE TYPE", B_EDIT, V_RIVER, K_DRONE, {P_DWAVE, P_PSERIES, P_TIMBRE, P_DPRESET}},
     {"SHARDS", B_EDIT, V_RIVER, K_DRONE, {P_SPRESET, P_SDENS, P_SRING, P_SOCT}},
     {"SHAPE", B_ENV, V_RIVER, K_DRONE, {P_ATTACK, P_RELEASE, P_SWELL, P_SPREAD_OCT}},
     {"FILTER", B_ENV, V_FILTER, K_DRONE, {P_FTYPE, P_FCUT, P_FRES, P_FDRIVE}},
@@ -173,9 +202,15 @@ static const page_t PAGES[] = {
     {"CLOUD", B_FX, V_RIVER, K_DRONE, {P_CSIZE, P_CAMT, P_SHIM, P_DAMP}},
     {"ECHO", B_FX, V_RIVER, K_DRONE, {P_ETIME, P_EFB, P_EAMT, P_FREEZE}},
     {"TAPE", B_FX, V_RIVER, K_DRONE, {P_TDRIVE, P_TWOBBLE, P_MFILT, P_WIDTH}},
+    {"SIDECHAIN", B_FX, V_DUCK, K_DRONE, {P_PUMP, P_SCTRIG, P_SCREL, P_SCWHAT}},
+    {"SIDECHAIN II", B_FX, V_DUCK, K_DRONE, {P_SCATK, P_PUMP, P_SCREL, P_SCTRIG}},
     {"MELODY", B_ARP, V_MEL, K_MEL, {P_MPLAYS, P_MSOUND, P_MOCT, P_MLEN}},
     {"MELODY LIVE", B_ARP, V_MEL, K_LIVE, {P_KEYPLAY, P_MSOUND, P_MOCT, P_MTONE}},
     {"MELODY SOUND", B_ARP, V_MEL, K_MEL, {P_MSOUND, P_MRAND, P_MTONE, P_MGLIDE}},
+    {"SOUND DESIGN", B_ARP, V_MEL, K_LIVE, {P_UFROM, P_UWAVE, P_UPOS, P_UMOD}},
+    {"SOUND DESIGN 2", B_ARP, V_MEL, K_LIVE, {P_UP2R, P_UP2L, P_UCUT, P_UFENV}},
+    {"SOUND DESIGN 3", B_ARP, V_MEL, K_LIVE, {P_URES, P_UATK, P_UDEC, P_USUS}},
+    {"SOUND DESIGN 4", B_ARP, V_MEL, K_LIVE, {P_UREL, P_UVIB, P_UBREATH, P_UDROP}},
     {"MELODY STEP", B_ARP, V_MEL, K_MEL, {P_MCUR, P_MNOTE, P_MTONE, P_MGLIDE}},
     {"MELODY TOOLS", B_ARP, V_MEL, K_MEL, {P_MGEN, P_MCLEAR, P_MSHIFT, P_MHUMAN}},
     {"BASS", B_ARP, V_BASS, K_BASS, {P_BPLAYS, P_BMODE, P_BCUR, P_BNOTE}},
@@ -185,6 +220,7 @@ static const page_t PAGES[] = {
     {"DRUM TRACK", B_SEQ, V_DRUMS, K_DRUMS, {P_DMTRACK, P_DMTUNE, P_DMDECAY, P_DMVOL}},
     {"DRUM FEEL", B_SEQ, V_DRUMS, K_DRUMS, {P_SWING, P_DMHUMAN, P_DMSPACE, P_PUMP}},
     {"DRUM TOOLS", B_SEQ, V_DRUMS, K_DRUMS, {P_DMEVOLVE, P_DMKIT, P_DMLEVEL, P_DMSPACE}},
+    {"SIDECHAIN", B_SEQ, V_DUCK, K_DRONE, {P_PUMP, P_SCTRIG, P_SCREL, P_SCATK}},
     {"CHORD SEQ", B_SEQ, V_CSEQ, K_CSEQ, {P_CSPLAYS, P_CSBARS, P_CSCUR, P_CSDEG}},
     {"GLOBAL", B_GLO, V_RIVER, K_DRONE, {P_TEMPO, P_SWING, P_CLOCK, P_MIDICH}},
     {"SCENES", B_SAVE, V_SCENES, K_SCENES, {P_MORPH, NONE, NONE, NONE}},
@@ -193,7 +229,7 @@ static const page_t PAGES[] = {
 #define PG_SCENES (NPAGES - 1u)
 
 /* ------------------------------------------------------------------- state --- */
-#define STATE_MAGIC 0x34454C46u          /* "FLE4" */
+#define STATE_MAGIC 0x37454C46u          /* "FLE7" */
 #define NSCN 8u
 typedef struct {
     uint8_t p[NP];
@@ -264,6 +300,13 @@ static void tcat(char *d, const char *s)
     while (*s)
         *d++ = *s++;
     *d = 0;
+}
+static uint32_t strlen_(const char *s)
+{
+    uint32_t n = 0;
+    while (s[n])
+        n++;
+    return n;
 }
 static void itxt(int32_t v, char *b)
 {
@@ -392,6 +435,64 @@ static void value_txt(uint32_t p, char *b)
     case FM_CH: if (!x) tcat(b, "ALL"); else itxt((int32_t)x, b); break;
     case FM_SHIFT: tcat(b, "< >"); break;
     case FM_DICE: tcat(b, "TURN"); break;
+    case FM_UPOS:                        /* where in the wavetable, or the FM ratio, or nothing */
+        if (F.p[P_UWAVE] == 8u) {
+            static const char *const WT[5] = {"SINE", "TRIANGLE", "SAW", "SQUARE", "PULSE"};
+            uint32_t q = x * 4u / 127u, fr = (x * 400u / 127u) % 100u;
+            tcat(b, WT[q > 4u ? 4u : q]);
+            if (fr >= 25u && q < 4u) {
+                tcat(b, ">");
+                tcat(b, WT[q + 1u]);
+            }
+        } else if (F.p[P_UWAVE] == 4u) {
+            static const char *const RAT[11] = {"X0.5", "X1", "X1.5", "X2", "X3", "X3.5", "X4", "X5", "X6", "X7", "X8"};
+            tcat(b, RAT[(x * 10u + 63u) / 127u]);
+        } else {
+            tcat(b, "-");
+        }
+        break;
+    case FM_UMOD:                        /* the wavetable's sweep (either way), or the FM's depth */
+        if (F.p[P_UWAVE] == 8u) {
+            int32_t sw = (int32_t)x - 64;
+            if (sw > 0)
+                tcat(b, "+");
+            itxt(sw, b + (sw > 0));
+        } else if (F.p[P_UWAVE] == 4u) {
+            itxt((int32_t)((x * 100u + 63u) / 127u), b);
+        } else {
+            tcat(b, "-");
+        }
+        break;
+    case FM_UCUT:
+        if (x >= 127u)
+            tcat(b, "OPEN");
+        else
+            itxt((int32_t)((x * 100u + 63u) / 127u), b);
+        break;
+    case FM_UTIME: {                     /* the level's times, in milliseconds or seconds */
+        float u = (float)x / 127.0f, sec = p == P_UATK ? 0.001f + 2.0f * u * u : p == P_UDEC ? 0.05f + 3.0f * u * u
+                                                                                               : 0.02f + 3.0f * u * u;
+        if (sec < 1.0f) {
+            itxt((int32_t)(sec * 1000.0f + 0.5f), b);
+            tcat(b, " MS");
+        } else {
+            itxt((int32_t)sec, b);
+            tcat(b, ".");
+            itxt((int32_t)(sec * 10.0f) % 10, b + strlen_(b));
+            tcat(b, " S");
+        }
+        break;
+    }
+    case FM_SCTIME: case FM_SCATK: {     /* the sidechain's times, in milliseconds */
+        float u = (float)x / 127.0f, sec = d->fmt == FM_SCTIME ? 0.03f * fm_powf(50.0f, u) : 0.002f + 0.06f * u * u;
+        if (d->fmt == FM_SCATK && x == 0u) {
+            tcat(b, "INSTANT");
+            break;
+        }
+        itxt((int32_t)(sec * 1000.0f + 0.5f), b);
+        tcat(b, " MS");
+        break;
+    }
     default: itxt((int32_t)x, b); break;
     }
 }
@@ -638,6 +739,7 @@ static void param_changed(uint32_t p, int32_t was)
         const uint8_t *v = DPRESET_V[x % NDPRESET];
         F.p[P_CHOIR] = v[0], F.p[P_PARTIALS] = v[1], F.p[P_BREATH] = v[2], F.p[P_TIMBRE] = v[3], F.p[P_TONE] = v[4];
         F.p[P_DETUNE] = v[5], F.p[P_ATTACK] = v[6], F.p[P_RELEASE] = v[7], F.p[P_DMOTION] = v[8], F.p[P_FCUT] = v[9];
+        F.p[P_DWAVE] = v[10], F.p[P_PSERIES] = v[11];
         break;
     }
     case P_ROOT: case P_SCALE: case P_CHORD: case P_VOICING: case P_HARM: {   /* the held chords made again */
@@ -710,6 +812,18 @@ static void param_changed(uint32_t p, int32_t was)
     case P_FREEZE:
         app_say("FREEZE", x ? "ON" : "OFF");
         break;
+    case P_UFROM:                        /* CUSTOM starts from a factory sound: its settings copied in */
+        eng_custom_from(x, F.p);
+        F.p[P_MSOUND] = MS_CUSTOM;
+        app_say("CUSTOM FROM", MSOUND_NAME[x % (NMSOUND - 1u)]);
+        break;
+    case P_UWAVE: case P_UPOS: case P_UMOD: case P_UP2R: case P_UP2L: case P_UCUT: case P_UFENV: case P_URES:
+    case P_UATK: case P_UDEC: case P_USUS: case P_UREL: case P_UVIB: case P_UBREATH: case P_UDROP:
+        if (F.p[P_MSOUND] != MS_CUSTOM) {   /* (designing: the melody plays the custom sound) */
+            F.p[P_MSOUND] = MS_CUSTOM;
+            app_say("MELODY SOUND", "CUSTOM");
+        }
+        break;
     case P_DRAND: {                      /* a new drone: every drone setting rolled, attack kept gentle */
         static const uint8_t R[] = {P_CHOIR, P_PARTIALS, P_BREATH, P_TIMBRE, P_TONE, P_DETUNE, P_RELEASE, P_DMOTION};
         uint32_t i, r = plat_ms() * 2654435761u + ui.keys;
@@ -719,12 +833,17 @@ static void param_changed(uint32_t p, int32_t was)
         }
         r = r * 1103515245u + 12345u;
         F.p[P_ATTACK] = (uint8_t)(25u + (r >> 16) % 77u);
+        r = r * 1103515245u + 12345u;
+        F.p[P_DWAVE] = (uint8_t)((r >> 16) % NDWAVE);
+        r = r * 1103515245u + 12345u;
+        F.p[P_PSERIES] = (uint8_t)((r >> 16) % NPSERIES);
+        F.p[P_TONE] = (uint8_t)(F.p[P_TONE] * 3u / 4u);   /* (rolled: kept on the soft side) */
         F.p[P_DRAND] = 0;
         app_say("DRONE", "RANDOM");
         break;
     }
     case P_MRAND: {                      /* a different melody sound, heard */
-        uint32_t r = (plat_ms() * 2654435761u) >> 8, n = (F.p[P_MSOUND] + 1u + r % (NMSOUND - 1u)) % NMSOUND;
+        uint32_t r = (plat_ms() * 2654435761u) >> 8, n = (F.p[P_MSOUND] % MS_CUSTOM + 1u + r % (MS_CUSTOM - 1u)) % MS_CUSTOM;
         F.p[P_MSOUND] = (uint8_t)n;
         F.p[P_MRAND] = 0;
         if (!F.playing)
@@ -877,6 +996,7 @@ static void defaults(void)
     for (i = 0; i < NCSEQ; i++)
         F.pat.cseq[i] = -1;
     F.pat.cseq[0] = 0, F.pat.cseq[1] = 5, F.pat.cseq[2] = 3, F.pat.cseq[3] = 6;
+    eng_custom_from(0, F.p);             /* (CUSTOM starts as the E.PIANO) */
     st.octave = 0;
 }
 
@@ -1447,19 +1567,37 @@ static void draw_header(void)
     cv_blit(0, 0);
 }
 
-/* the name, large, centred on cx */
-static void draw_logo(int32_t cx, int32_t y, uint16_t c)
+/* the logo (logo.h: each pixel 0..15 of its pink) onto the canvas at x0, y0; rows from row0, n of them */
+static void draw_logo_img(const uint8_t *img, uint32_t w, uint32_t row0, uint32_t n, int32_t x0, int32_t y0)
 {
-    cv_text(cx - tw(&FONT_L, "VOID") / 2, y, &FONT_L, "VOID", c);
+    static uint16_t pal[16];
+    static int made;
+    uint32_t x, y;
+    if (!made) {                         /* black .. the logo's pink, sixteen steps */
+        uint32_t k;
+        for (k = 0; k < 16u; k++)
+            pal[k] = RGB(LOGO_PINK_R * k / 15u, LOGO_PINK_G * k / 15u, LOGO_PINK_B * k / 15u);
+        made = 1;
+    }
+    for (y = 0; y < n; y++) {
+        const uint8_t *row = img + (row0 + y) * (w / 2u);
+        for (x = 0; x < w; x++) {
+            uint32_t v = (row[x >> 1] >> (x & 1u ? 0 : 4)) & 15u;
+            if (v)
+                px(x0 + (int32_t)x, y0 + (int32_t)y, pal[v]);
+        }
+    }
 }
 
-void app_splash(void)                    /* the first screen at boot */
+
+void app_splash(void)                    /* the first screen at boot: the logo, in three strips */
 {
-    lcd_fill(0, 0, 240, 240, C_BG);
-    cv_begin(240, 64, C_BG);
-    draw_logo(120, 4, C_ICE);
-    cv_text(120 - tw(&FONT_XS, "DRONES / CHORDS / BEATS") / 2, 44, &FONT_XS, "DRONES / CHORDS / BEATS", C_MIST);
-    cv_blit(0, 88);
+    uint32_t k;
+    for (k = 0; k < 3u; k++) {
+        cv_begin(240, 80, RGB(0, 0, 0));
+        draw_logo_img(logo_splash, LOGO_SPLASH_W, k * 80u, 80u, 0, 0);
+        cv_blit(0, (int32_t)(k * 80u));
+    }
 }
 
 void app_overload(void)                  /* the render ran late: a drone voice fewer (the main loop gives it back) */
@@ -1507,8 +1645,8 @@ static void view_river(void)
         chord_txt(r, d, t);
         cv_text(236 - tw(&FONT_M, t), 4, &FONT_M, t, C_ICE);
     } else {                             /* nothing sounding: the name */
-        draw_logo(120, 22, C_ICE);
-        cv_text(120 - tw(&FONT_XS, "PLAY A KEY") / 2, 62, &FONT_XS, "PLAY A KEY", C_SLATE);
+        draw_logo_img(logo_word, LOGO_WORD_W, 0, LOGO_WORD_H, 120 - (int32_t)LOGO_WORD_W / 2, 2);
+        cv_text(120 - tw(&FONT_XS, "PLAY A KEY") / 2, 82, &FONT_XS, "PLAY A KEY", C_SLATE);
     }
     if (F.playing && V.step >= 0)        /* the beat along the bottom */
         for (j = 0; j < NSTEP; j++)
@@ -1666,6 +1804,54 @@ static void view_scenes(void)
     cv_text(6, 88, &FONT_XS, "KEY: RECALL   SAVE HELD + KEY: STORE", C_MIST);
 }
 
+/* the sidechain: its gain over a bar (each trigger, ATTACK down, RELEASE back up), the beat moving along */
+static void view_duck(void)
+{
+    static const char *const TR[NSCTRIG] = {"2000000010200000", "1000100010001000", "1010101010101010",
+                                            "0010001000100010", "0000100000001000", "2000100010201000", "1000001000001000"};
+    uint32_t trig = F.p[P_SCTRIG] % NSCTRIG, s;
+    float depth = 0.8f * (float)F.p[P_PUMP] / 127.0f, rel = 0.03f * fm_powf(50.0f, (float)F.p[P_SCREL] / 127.0f);
+    float atk = (float)F.p[P_SCATK] / 127.0f, at_s = F.p[P_SCATK] ? 0.002f + 0.06f * atk * atk : 0.0f;
+    float step_s = 60.0f / (V.bpm > 1.0f ? V.bpm : 74.0f) / 4.0f, env = 0.0f, t_since = 99.0f;
+    const char *pat = TR[trig];
+    int32_t x, py = -1;
+    char kick[17];
+    for (s = 0; s < NSTEP; s++)          /* (KICK: the drum pattern's own kicks) */
+        kick[s] = trig == 0u || trig == 5u ? (F.pat.drum[0][s] ? '1' : '0') : pat[s];
+    if (trig == 5u)
+        for (s = 0; s < NSTEP; s++)
+            kick[s] = (F.pat.drum[0][s] || F.pat.drum[1][s] || F.pat.drum[2][s]) ? '1' : '0';
+    if (trig == 4u)
+        for (s = 0; s < NSTEP; s++)
+            kick[s] = (F.pat.drum[1][s] || F.pat.drum[2][s]) ? '1' : '0';
+    box(0, 12, 240, 1, C_RULE);
+    for (x = 0; x < 240; x++) {
+        float t = (float)x / 240.0f * 16.0f * step_s, g;
+        int32_t st = x * 16 / 240, y;
+        if (kick[st] != '0' && x == st * 240 / 16)
+            t_since = 0.0f;
+        else
+            t_since += 16.0f * step_s / 240.0f;
+        (void)t;
+        if (at_s > 0.0f && t_since < at_s)
+            env = depth * t_since / at_s;
+        else if (t_since < 98.0f)
+            env = depth * fm_expf(-(t_since - at_s) / rel);
+        g = 1.0f - env;
+        y = 14 + (int32_t)((1.0f - g) * 70.0f);
+        if (py >= 0) {
+            int32_t a = py < y ? py : y, b2 = py < y ? y : py, k;
+            for (k = a; k <= b2; k++)
+                px(x, k, C_ICE);
+        }
+        box(x, 12, 1, y - 12, C_DEEP);
+        py = y;
+    }
+    for (s = 0; s < NSTEP; s++)          /* the triggers, the beat */
+        box((int32_t)s * 15 + 2, 90, 11, 4,
+            F.playing && V.step == (int8_t)s ? C_AMBER : kick[s] != '0' ? C_SOFT : C_RULE);
+}
+
 static void draw_view(void)
 {
     cv_begin(240, 100, C_BG);
@@ -1678,6 +1864,7 @@ static void draw_view(void)
     case V_LFO: view_lfo(); break;
     case V_MIXER: view_mixer(); break;
     case V_SCENES: view_scenes(); break;
+    case V_DUCK: view_duck(); break;
     default: view_river(); break;
     }
     cv_blit(0, 30);
