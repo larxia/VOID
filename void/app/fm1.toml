@@ -1,0 +1,20 @@
+# VOID's build settings (fm1-base's tools/build.py)
+name = "VOID"                  # the build's files: void.fwsc
+id_prefix = "FM-1_83"          # package identity: dev FM-1_8300, releases FM-1_83XXYYZZ
+usb_manufacturer = "VOID"
+usb_product = "VOID FM-1"
+include = ["dsp"]              # the engine's header
+o2 = ["dsp/*.c"]               # the sound, compiled apart at -O2
+words = "words.tsv"
+ble = false                    # no radio: its RAM and pool go to the sound
+font_full = ["M"]              # lower case in the middle font (chord names: m7, maj9, add9)
+tagline = "drones, chords, melody, bass, drums, space"
+repo = "https://github.com/OWNER/REPO"      # (build.sh fills in OWNER/REPO from GitHub Actions)
+site = "https://OWNER.github.io/REPO/"
+install = "https://OWNER.github.io/REPO/install/"
+screenshot = "app/docs/img/screen-play.png"
+licence = "MPL-2.0"
+credits = "Built on fm1-base and felucca-bsp."
+author = "Xila"
+description = "An ambient instrument: drones played as chords that follow your note, a melody sequencer with 24 sounds, a bass that follows the chords or plays your notes, a drum machine with four kits, a shimmer cloud with freeze, three LFOs and eight scenes."
+tags = ["synth", "ambient", "sequencer", "chords", "drum-machine"]
