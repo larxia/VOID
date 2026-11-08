@@ -27,6 +27,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Lay out (the files may have been uploaded inside a void/ folder)
+        run: |
+          if [ -d void/app ] && [ ! -d app ]; then cp -a void/. . ; fi
+          chmod +x build.sh
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -79,6 +84,9 @@ jobs:
 
       - name: The site
         run: python3 fm1-base/tools/make_site.py app "app/build/void-$VERSION.fwsc" "$VERSION" site
+
+      - name: The computer version beside it
+        run: if [ -d computer ]; then cp -r computer site/computer; fi
 
       - uses: actions/upload-pages-artifact@v3
         with:
