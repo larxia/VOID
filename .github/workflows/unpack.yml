@@ -1,0 +1,29 @@
+name: Unpack HYPER
+
+on:
+  push:
+    paths: ["HYPER.zip"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack and commit
+        run: |
+          set -e
+          test -f HYPER.zip || { echo "no HYPER.zip in the repository"; exit 1; }
+          rm -rf /tmp/hz && mkdir /tmp/hz
+          unzip -q HYPER.zip -d /tmp/hz
+          SRC=/tmp/hz; [ -d /tmp/hz/HYPER ] && SRC=/tmp/hz/HYPER
+          cp -a "$SRC"/. .
+          git rm -q --cached HYPER.zip && rm -f HYPER.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898181+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Unpack HYPER.zip"
+          git push
