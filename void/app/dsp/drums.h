@@ -7,4 +7,4 @@ enum { DM_KICK, DM_SNARE, DM_CLAP, DM_HAT, DM_OHAT, DM_PERC };
 void drums_reset(void);
 void drums_hit(uint32_t v, float vel);
 void drums_render(float *l, float *r, uint32_t n, float level);   /* added into l, r */
-int drums_kicked(void);                  /* a kick since the last call (PUMP) */
+   int drums_snared(void);                 /* a kick since the last call (PUMP) */
